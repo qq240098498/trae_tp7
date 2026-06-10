@@ -12,6 +12,16 @@ import {
   UserPlus,
   Calendar as CalendarIcon,
   Sparkles,
+  Trophy,
+  Medal,
+  Award,
+  BarChart3,
+  Search,
+  DollarSign,
+  Users,
+  Eye,
+  TrendingUp,
+  Star,
 } from 'lucide-react';
 import {
   format,
@@ -20,14 +30,35 @@ import {
   addDays,
   isSameDay,
   isToday,
+  startOfMonth,
+  endOfMonth,
+  subDays,
 } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { useAppStore } from '@/store';
 import { cn } from '@/lib/utils';
-import type { Technician, Schedule as ScheduleType } from '@/types';
+import type { Technician, Schedule as ScheduleType, Appointment } from '@/types';
 
 type ShiftType = 'morning' | 'afternoon' | 'evening' | 'rest';
 type ViewMode = 'week' | 'month';
+type RankSortType = 'count' | 'revenue';
+type DateRangePreset = 'today' | 'week' | 'month' | 'custom';
+
+interface TechnicianStats {
+  technicianId: string;
+  technician: Technician;
+  orderCount: number;
+  totalRevenue: number;
+  completedCount: number;
+  avgOrderValue: number;
+  uniqueCustomers: number;
+}
+
+interface DateRange {
+  startDate: string;
+  endDate: string;
+  preset: DateRangePreset;
+}
 
 interface ShiftConfig {
   label: string;
@@ -163,6 +194,7 @@ export default function TechnicianSchedule() {
     projects,
     schedules,
     appointments,
+    customers,
     addTechnician,
     updateTechnician,
     addSchedule,
@@ -218,6 +250,18 @@ export default function TechnicianSchedule() {
     Partial<Record<keyof BatchScheduleData, string>>
   >({});
 
+  const [dateRange, setDateRange] = useState<DateRange>(() => {
+    const today = new Date();
+    return {
+      startDate: format(subDays(today, 29), 'yyyy-MM-dd'),
+      endDate: format(today, 'yyyy-MM-dd'),
+      preset: 'month',
+    };
+  });
+  const [rankSortType, setRankSortType] = useState<RankSortType>('count');
+  const [selectedTechnicianForStats, setSelectedTechnicianForStats] = useState<Technician | null>(null);
+  const [isTechnicianStatsModalOpen, setIsTechnicianStatsModalOpen] = useState(false);
+
   const weekDays = useMemo(() => {
     return Array.from({ length: 7 }, (_, i) => addDays(currentWeekStart, i));
   }, [currentWeekStart]);
@@ -235,6 +279,145 @@ export default function TechnicianSchedule() {
   const goToPrevWeek = () => setCurrentWeekStart((d) => addDays(d, -7));
   const goToNextWeek = () => setCurrentWeekStart((d) => addDays(d, 7));
   const goToThisWeek = () => setCurrentWeekStart(startOfWeek(new Date(), { weekStartsOn: 1 }));
+
+  const filteredAppointments = useMemo(() => {
+    const start = dateRange.startDate;
+    const end = dateRange.endDate;
+    return appointments.filter((a) => {
+      if (a.status === 'cancelled' || a.status === 'no_show') return false;
+      return a.date >= start && a.date <= end;
+    });
+  }, [appointments, dateRange]);
+
+  const technicianStatsList = useMemo<TechnicianStats[]>(() => {
+    return technicians.map((tech) => {
+      const techAppointments = filteredAppointments.filter(
+        (a) => a.technicianId === tech.id
+      );
+      const completedCount = techAppointments.filter(
+        (a) => a.status === 'completed'
+      ).length;
+      const orderCount = techAppointments.length;
+      const totalRevenue = techAppointments.reduce((sum, a) => sum + a.price, 0);
+      const uniqueCustomers = new Set(
+        techAppointments.map((a) => a.customerId)
+      ).size;
+      return {
+        technicianId: tech.id,
+        technician: tech,
+        orderCount,
+        totalRevenue,
+        completedCount,
+        avgOrderValue: orderCount > 0 ? totalRevenue / orderCount : 0,
+        uniqueCustomers,
+      };
+    });
+  }, [technicians, filteredAppointments]);
+
+  const overallStats = useMemo(() => {
+    return technicianStatsList.reduce(
+      (acc, stat) => {
+        acc.totalOrders += stat.orderCount;
+        acc.totalRevenue += stat.totalRevenue;
+        acc.totalCompleted += stat.completedCount;
+        acc.totalUniqueCustomers += stat.uniqueCustomers;
+        return acc;
+      },
+      {
+        totalOrders: 0,
+        totalRevenue: 0,
+        totalCompleted: 0,
+        totalUniqueCustomers: 0,
+      }
+    );
+  }, [technicianStatsList]);
+
+  const rankedTechnicians = useMemo(() => {
+    const sorted = [...technicianStatsList].sort((a, b) => {
+      if (rankSortType === 'count') {
+        return b.orderCount - a.orderCount;
+      }
+      return b.totalRevenue - a.totalRevenue;
+    });
+    return sorted;
+  }, [technicianStatsList, rankSortType]);
+
+  const maxRankValue = useMemo(() => {
+    if (rankedTechnicians.length === 0) return 0;
+    const max = rankSortType === 'count'
+      ? rankedTechnicians[0].orderCount
+      : rankedTechnicians[0].totalRevenue;
+    return max > 0 ? max : 1;
+  }, [rankedTechnicians, rankSortType]);
+
+  const getAppointmentsForTechnician = (technicianId: string) => {
+    return filteredAppointments.filter((a) => a.technicianId === technicianId);
+  };
+
+  const getCustomerName = (customerId: string) =>
+    customers.find((c) => c.id === customerId)?.name ?? '未知客户';
+
+  const handleDateRangePresetChange = (preset: DateRangePreset) => {
+    const today = new Date();
+    let start: Date;
+    let end: Date;
+    switch (preset) {
+      case 'today':
+        start = today;
+        end = today;
+        break;
+      case 'week':
+        start = subDays(today, 6);
+        end = today;
+        break;
+      case 'month':
+        start = subDays(today, 29);
+        end = today;
+        break;
+      case 'custom':
+      default:
+        return;
+    }
+    setDateRange({
+      startDate: format(start, 'yyyy-MM-dd'),
+      endDate: format(end, 'yyyy-MM-dd'),
+      preset,
+    });
+  };
+
+  const handleOpenTechnicianStats = (technician: Technician) => {
+    setSelectedTechnicianForStats(technician);
+    setIsTechnicianStatsModalOpen(true);
+  };
+
+  const getRankBadge = (index: number) => {
+    if (index === 0) {
+      return (
+        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-yellow-400 to-yellow-600 flex items-center justify-center text-white shadow-md">
+          <Trophy size={14} />
+        </div>
+      );
+    }
+    if (index === 1) {
+      return (
+        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-slate-300 to-slate-500 flex items-center justify-center text-white shadow-md">
+          <Medal size={14} />
+        </div>
+      );
+    }
+    if (index === 2) {
+      return (
+        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-500 to-amber-700 flex items-center justify-center text-white shadow-md">
+          <Award size={14} />
+        </div>
+      );
+    }
+    return (
+      <div className="w-8 h-8 rounded-full bg-ink-100 flex items-center justify-center text-ink-500 font-semibold text-sm">
+        {index + 1}
+      </div>
+    );
+  };
 
   const getSchedulesForCell = (technicianId: string, date: Date) => {
     const dateStr = format(date, 'yyyy-MM-dd');
@@ -715,6 +898,255 @@ export default function TechnicianSchedule() {
                 );
               })
             )}
+          </div>
+        </div>
+
+        {/* 日期范围搜索 & 服务统计 */}
+        <div className="card p-5 mb-6">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-5">
+            <h2 className="text-lg font-semibold text-ink-500 flex items-center gap-2">
+              <BarChart3 size={18} className="text-indigo-500" />
+              技师服务统计
+            </h2>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+              <div className="flex items-center bg-cream-100 rounded-xl p-1">
+                {(['today', 'week', 'month'] as DateRangePreset[]).map((preset) => (
+                  <button
+                    key={preset}
+                    onClick={() => handleDateRangePresetChange(preset)}
+                    className={cn(
+                      'px-4 py-1.5 rounded-lg text-sm font-medium transition-all duration-200',
+                      dateRange.preset === preset
+                        ? 'bg-white text-ink-500 shadow-card'
+                        : 'text-ink-400 hover:text-ink-500'
+                    )}
+                  >
+                    {preset === 'today' ? '今日' : preset === 'week' ? '近7天' : '近30天'}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-300" />
+                  <input
+                    type="date"
+                    value={dateRange.startDate}
+                    onChange={(e) =>
+                      setDateRange((d) => ({
+                        ...d,
+                        startDate: e.target.value,
+                        preset: 'custom',
+                      }))
+                    }
+                    className="pl-9 pr-3 py-1.5 rounded-lg border border-cream-200 text-sm text-ink-500 focus:outline-none focus:ring-2 focus:ring-jade-100 focus:border-jade-300"
+                  />
+                </div>
+                <span className="text-ink-300">至</span>
+                <input
+                  type="date"
+                  value={dateRange.endDate}
+                  onChange={(e) =>
+                    setDateRange((d) => ({
+                      ...d,
+                      endDate: e.target.value,
+                      preset: 'custom',
+                    }))
+                  }
+                  className="px-3 py-1.5 rounded-lg border border-cream-200 text-sm text-ink-500 focus:outline-none focus:ring-2 focus:ring-jade-100 focus:border-jade-300"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 总体统计卡片 */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-gradient-to-br from-jade-50 to-jade-100/50 rounded-xl p-4 border border-jade-100">
+              <div className="flex items-center gap-2.5 mb-2">
+                <div className="w-9 h-9 rounded-lg bg-jade-500 flex items-center justify-center shadow-sm">
+                  <Users size={17} className="text-white" />
+                </div>
+                <span className="text-sm font-medium text-ink-500">总订单数</span>
+              </div>
+              <p className="text-2xl font-bold text-jade-700">
+                {overallStats.totalOrders}
+                <span className="text-sm font-normal text-ink-400 ml-1">单</span>
+              </p>
+            </div>
+            <div className="bg-gradient-to-br from-gold-50 to-gold-100/50 rounded-xl p-4 border border-gold-100">
+              <div className="flex items-center gap-2.5 mb-2">
+                <div className="w-9 h-9 rounded-lg bg-gold-500 flex items-center justify-center shadow-sm">
+                  <DollarSign size={17} className="text-white" />
+                </div>
+                <span className="text-sm font-medium text-ink-500">总营业额</span>
+              </div>
+              <p className="text-2xl font-bold text-gold-700">
+                ¥{overallStats.totalRevenue.toLocaleString()}
+              </p>
+            </div>
+            <div className="bg-gradient-to-br from-sandalwood-50 to-sandalwood-100/50 rounded-xl p-4 border border-sandalwood-100">
+              <div className="flex items-center gap-2.5 mb-2">
+                <div className="w-9 h-9 rounded-lg bg-sandalwood-500 flex items-center justify-center shadow-sm">
+                  <Check size={17} className="text-white" />
+                </div>
+                <span className="text-sm font-medium text-ink-500">已完成</span>
+              </div>
+              <p className="text-2xl font-bold text-sandalwood-700">
+                {overallStats.totalCompleted}
+                <span className="text-sm font-normal text-ink-400 ml-1">单</span>
+              </p>
+            </div>
+            <div className="bg-gradient-to-br from-indigo-50 to-indigo-100/50 rounded-xl p-4 border border-indigo-100">
+              <div className="flex items-center gap-2.5 mb-2">
+                <div className="w-9 h-9 rounded-lg bg-indigo-500 flex items-center justify-center shadow-sm">
+                  <TrendingUp size={17} className="text-white" />
+                </div>
+                <span className="text-sm font-medium text-ink-500">服务人次</span>
+              </div>
+              <p className="text-2xl font-bold text-indigo-700">
+                {overallStats.totalUniqueCustomers}
+                <span className="text-sm font-normal text-ink-400 ml-1">人</span>
+              </p>
+            </div>
+          </div>
+
+          {/* 排行榜 */}
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Trophy size={18} className="text-gold-500" />
+                <h3 className="font-semibold text-ink-500">技师排行榜</h3>
+              </div>
+              <div className="flex items-center bg-cream-100 rounded-xl p-1">
+                <button
+                  onClick={() => setRankSortType('count')}
+                  className={cn(
+                    'px-3 py-1 rounded-lg text-xs font-medium transition-all duration-200 flex items-center gap-1',
+                    rankSortType === 'count'
+                      ? 'bg-white text-ink-500 shadow-card'
+                      : 'text-ink-400 hover:text-ink-500'
+                  )}
+                >
+                  <Users size={12} />
+                  按单数
+                </button>
+                <button
+                  onClick={() => setRankSortType('revenue')}
+                  className={cn(
+                    'px-3 py-1 rounded-lg text-xs font-medium transition-all duration-200 flex items-center gap-1',
+                    rankSortType === 'revenue'
+                      ? 'bg-white text-ink-500 shadow-card'
+                      : 'text-ink-400 hover:text-ink-500'
+                  )}
+                >
+                  <DollarSign size={12} />
+                  按金额
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {rankedTechnicians.length === 0 ? (
+                <div className="py-12 text-center text-ink-300">暂无数据</div>
+              ) : (
+                rankedTechnicians.map((stat, idx) => {
+                  const techIdx = technicians.findIndex(
+                    (t) => t.id === stat.technicianId
+                  );
+                  const progressPct =
+                    rankSortType === 'count'
+                      ? (stat.orderCount / maxRankValue) * 100
+                      : (stat.totalRevenue / maxRankValue) * 100;
+                  const displayValue =
+                    rankSortType === 'count'
+                      ? `${stat.orderCount}单`
+                      : `¥${stat.totalRevenue.toLocaleString()}`;
+                  return (
+                    <div
+                      key={stat.technicianId}
+                      onClick={() => handleOpenTechnicianStats(stat.technician)}
+                      className={cn(
+                        'flex items-center gap-4 p-3 rounded-xl border transition-all duration-200 cursor-pointer',
+                        idx < 3
+                          ? 'bg-gradient-to-r from-cream-50 to-white border-cream-200 hover:shadow-card-hover hover:-translate-y-0.5'
+                          : 'bg-white border-cream-100 hover:border-cream-300 hover:shadow-sm'
+                      )}
+                    >
+                      {getRankBadge(idx)}
+                      <div
+                        className={cn(
+                          'w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold shadow-sm bg-gradient-to-br flex-shrink-0',
+                          getAvatarGradient(techIdx >= 0 ? techIdx : idx)
+                        )}
+                      >
+                        {stat.technician.name.charAt(0)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-semibold text-ink-500 truncate">
+                              {stat.technician.name}
+                            </span>
+                            {stat.technician.position && (
+                              <span className="text-xs text-ink-300 flex-shrink-0">
+                                {stat.technician.position}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                            <span
+                              className={cn(
+                                'text-lg font-bold',
+                                idx === 0
+                                  ? 'text-yellow-600'
+                                  : idx === 1
+                                  ? 'text-slate-600'
+                                  : idx === 2
+                                  ? 'text-amber-700'
+                                  : 'text-ink-600'
+                              )}
+                            >
+                              {displayValue}
+                            </span>
+                            <Eye size={15} className="text-ink-300" />
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="flex-1 h-2 bg-cream-100 rounded-full overflow-hidden">
+                            <div
+                              className={cn(
+                                'h-full rounded-full transition-all duration-500',
+                                idx === 0
+                                  ? 'bg-gradient-to-r from-yellow-400 to-yellow-500'
+                                  : idx === 1
+                                  ? 'bg-gradient-to-r from-slate-300 to-slate-400'
+                                  : idx === 2
+                                  ? 'bg-gradient-to-r from-amber-400 to-amber-500'
+                                  : 'bg-gradient-to-r from-jade-400 to-jade-500'
+                              )}
+                              style={{ width: `${progressPct}%` }}
+                            />
+                          </div>
+                          <div className="flex items-center gap-3 text-xs text-ink-400 flex-shrink-0">
+                            <span className="flex items-center gap-1">
+                              <Check size={11} className="text-jade-500" />
+                              完成{stat.completedCount}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Users size={11} className="text-indigo-500" />
+                              {stat.uniqueCustomers}人
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Star size={11} className="text-gold-500" />
+                              ¥{stat.avgOrderValue.toFixed(0)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
         </div>
 
@@ -1664,6 +2096,208 @@ export default function TechnicianSchedule() {
           </div>
         </div>
       )}
+
+      {/* 技师服务订单详情 Modal */}
+      {isTechnicianStatsModalOpen && selectedTechnicianForStats && (() => {
+        const techAppointments = getAppointmentsForTechnician(selectedTechnicianForStats.id);
+        const techStats = technicianStatsList.find(
+          (s) => s.technicianId === selectedTechnicianForStats.id
+        );
+        const techIdx = technicians.findIndex(
+          (t) => t.id === selectedTechnicianForStats.id
+        );
+        const sortedAppointments = [...techAppointments].sort(
+          (a, b) => (b.date + b.startTime).localeCompare(a.date + a.startTime)
+        );
+
+        const getStatusInfo = (status: Appointment['status']) => {
+          switch (status) {
+            case 'pending':
+              return { label: '待确认', className: 'bg-amber-50 text-amber-700 border-amber-200' };
+            case 'confirmed':
+              return { label: '已确认', className: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
+            case 'in_progress':
+              return { label: '进行中', className: 'bg-sandalwood-50 text-sandalwood-700 border-sandalwood-200' };
+            case 'completed':
+              return { label: '已完成', className: 'bg-jade-50 text-jade-700 border-jade-200' };
+            case 'cancelled':
+              return { label: '已取消', className: 'bg-ink-50 text-ink-500 border-ink-200' };
+            case 'no_show':
+              return { label: '未到店', className: 'bg-rose-50 text-rose-700 border-rose-200' };
+            default:
+              return { label: status, className: 'bg-ink-50 text-ink-500 border-ink-200' };
+          }
+        };
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-ink-900/50 backdrop-blur-sm animate-fade-in"
+              onClick={() => setIsTechnicianStatsModalOpen(false)}
+            />
+            <div className="relative bg-white rounded-2xl shadow-modal w-full max-w-3xl max-h-[90vh] overflow-hidden animate-fade-up">
+              <div className="flex items-center justify-between px-6 py-5 border-b border-cream-200">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={cn(
+                      'w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-md bg-gradient-to-br',
+                      getAvatarGradient(techIdx >= 0 ? techIdx : 0)
+                    )}
+                  >
+                    {selectedTechnicianForStats.name.charAt(0)}
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-ink-500">
+                      {selectedTechnicianForStats.name}
+                      <span className="text-sm font-normal text-ink-300 ml-2">
+                        {selectedTechnicianForStats.position || '技师'}
+                      </span>
+                    </h2>
+                    <p className="text-sm text-ink-300 mt-0.5">
+                      服务时段：{dateRange.startDate} ~ {dateRange.endDate}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsTechnicianStatsModalOpen(false)}
+                  className="p-2 rounded-lg text-ink-300 hover:text-ink-500 hover:bg-cream-100 transition-all"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* 技师个人统计 */}
+              {techStats && (
+                <div className="px-6 py-4 bg-cream-50/80 border-b border-cream-200">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="bg-white rounded-xl p-3 border border-cream-100">
+                      <p className="text-xs text-ink-400 mb-1">订单总数</p>
+                      <p className="text-xl font-bold text-jade-600">{techStats.orderCount}<span className="text-sm font-normal ml-0.5">单</span></p>
+                    </div>
+                    <div className="bg-white rounded-xl p-3 border border-cream-100">
+                      <p className="text-xs text-ink-400 mb-1">总营业额</p>
+                      <p className="text-xl font-bold text-gold-600">¥{techStats.totalRevenue.toLocaleString()}</p>
+                    </div>
+                    <div className="bg-white rounded-xl p-3 border border-cream-100">
+                      <p className="text-xs text-ink-400 mb-1">已完成</p>
+                      <p className="text-xl font-bold text-sandalwood-600">{techStats.completedCount}<span className="text-sm font-normal ml-0.5">单</span></p>
+                    </div>
+                    <div className="bg-white rounded-xl p-3 border border-cream-100">
+                      <p className="text-xs text-ink-400 mb-1">客单价</p>
+                      <p className="text-xl font-bold text-indigo-600">¥{techStats.avgOrderValue.toFixed(0)}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 订单列表 */}
+              <div className="px-6 py-4 overflow-y-auto max-h-[calc(90vh-320px)]">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-semibold text-ink-500 flex items-center gap-2">
+                    <CalendarDays size={16} className="text-ink-400" />
+                    服务订单明细
+                    <span className="text-sm font-normal text-ink-300">({techAppointments.length}条)</span>
+                  </h3>
+                </div>
+
+                {sortedAppointments.length === 0 ? (
+                  <div className="py-16 text-center">
+                    <div className="w-16 h-16 mx-auto rounded-full bg-cream-100 flex items-center justify-center mb-4">
+                      <CalendarDays size={28} className="text-ink-300" />
+                    </div>
+                    <p className="text-ink-400">该时段内暂无服务订单</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {sortedAppointments.map((appt) => {
+                      const statusInfo = getStatusInfo(appt.status);
+                      const project = projects.find((p) => p.id === appt.projectId);
+                      const customer = customers.find((c) => c.id === appt.customerId);
+                      return (
+                        <div
+                          key={appt.id}
+                          className="bg-white rounded-xl border border-cream-100 p-4 hover:border-cream-300 hover:shadow-sm transition-all"
+                        >
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-2">
+                                <div
+                                  className={cn(
+                                    'w-8 h-8 rounded-md flex items-center justify-center text-white text-xs font-semibold shadow-sm',
+                                    getProjectColor(appt.projectId, projectIdsList)
+                                  )}
+                                >
+                                  {project?.name?.charAt(0) || '项'}
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="font-semibold text-ink-500 truncate">
+                                    {project?.name || '未知项目'}
+                                  </p>
+                                  <p className="text-xs text-ink-300 mt-0.5 flex items-center gap-2">
+                                    <span>
+                                      {appt.date} {appt.startTime}-{appt.endTime}
+                                    </span>
+                                    <span>·</span>
+                                    <span>{project?.duration || 0}分钟</span>
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-4 text-sm">
+                                <span className="flex items-center gap-1.5 text-ink-400">
+                                  <Users size={13} />
+                                  {customer?.name || '未知客户'}
+                                  {customer?.phone && (
+                                    <span className="text-ink-300">({customer.phone})</span>
+                                  )}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="text-right flex-shrink-0">
+                              <span
+                                className={cn(
+                                  'inline-block px-2.5 py-1 rounded-md text-xs font-medium border',
+                                  statusInfo.className
+                                )}
+                              >
+                                {statusInfo.label}
+                              </span>
+                              <p className="text-lg font-bold text-ink-600 mt-2">
+                                ¥{appt.price.toLocaleString()}
+                              </p>
+                              {appt.paidAmount > 0 && appt.paidAmount !== appt.price && (
+                                <p className="text-xs text-ink-300 mt-0.5">
+                                  已付 ¥{appt.paidAmount}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          {appt.note && (
+                            <div className="mt-3 pt-3 border-t border-cream-100">
+                              <p className="text-xs text-ink-400">
+                                <span className="font-medium text-ink-500">备注：</span>
+                                {appt.note}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end px-6 py-4 border-t border-cream-200 bg-cream-50">
+                <button
+                  className="btn-primary"
+                  onClick={() => setIsTechnicianStatsModalOpen(false)}
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
