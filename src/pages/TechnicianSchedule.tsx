@@ -22,6 +22,17 @@ import {
   Eye,
   TrendingUp,
   Star,
+  Wallet,
+  CreditCard,
+  Send,
+  FileText,
+  PiggyBank,
+  Coins,
+  Receipt,
+  Download,
+  ChevronDown,
+  Percent,
+  ClipboardList,
 } from 'lucide-react';
 import {
   format,
@@ -37,12 +48,14 @@ import {
 import { zhCN } from 'date-fns/locale';
 import { useAppStore } from '@/store';
 import { cn } from '@/lib/utils';
-import type { Technician, Schedule as ScheduleType, Appointment } from '@/types';
+import type { Technician, Schedule as ScheduleType, Appointment, SalaryPayment, SalaryItem, PaymentMethod } from '@/types';
 
 type ShiftType = 'morning' | 'afternoon' | 'evening' | 'rest';
 type ViewMode = 'week' | 'month';
 type RankSortType = 'count' | 'revenue';
 type DateRangePreset = 'today' | 'week' | 'month' | 'custom';
+type PageTab = 'schedule' | 'salary';
+type SalaryStatusFilter = 'all' | 'pending' | 'paid';
 
 interface TechnicianStats {
   technicianId: string;
@@ -58,6 +71,39 @@ interface DateRange {
   startDate: string;
   endDate: string;
   preset: DateRangePreset;
+}
+
+interface SalaryCalcItem {
+  appointmentId: string;
+  projectId: string;
+  projectName: string;
+  serviceDate: string;
+  servicePrice: number;
+  commissionRate: number;
+  commissionAmount: number;
+}
+
+interface TechnicianSalaryCalc {
+  technicianId: string;
+  technician: Technician;
+  totalServiceCount: number;
+  totalAmount: number;
+  totalCommission: number;
+  items: SalaryCalcItem[];
+}
+
+interface GenerateSalaryForm {
+  technicianIds: string[];
+  periodStart: string;
+  periodEnd: string;
+  baseSalary: string;
+  bonus: string;
+  deductions: string;
+}
+
+interface PaySalaryForm {
+  paidMethod: PaymentMethod;
+  remark: string;
 }
 
 interface ShiftConfig {
@@ -200,7 +246,43 @@ export default function TechnicianSchedule() {
     addSchedule,
     updateSchedule,
     deleteSchedule,
+    salaryPayments,
+    addSalaryPayment,
+    updateSalaryPayment,
+    markSalaryPaid,
   } = useAppStore();
+
+  const [activeTab, setActiveTab] = useState<PageTab>('schedule');
+  const [salaryStatusFilter, setSalaryStatusFilter] = useState<SalaryStatusFilter>('all');
+  const [salaryDateRange, setSalaryDateRange] = useState<DateRange>(() => {
+    const today = new Date();
+    return {
+      startDate: format(startOfMonth(today), 'yyyy-MM-dd'),
+      endDate: format(endOfMonth(today), 'yyyy-MM-dd'),
+      preset: 'month',
+    };
+  });
+
+  const [isGenerateSalaryModalOpen, setIsGenerateSalaryModalOpen] = useState(false);
+  const [generateSalaryForm, setGenerateSalaryForm] = useState<GenerateSalaryForm>({
+    technicianIds: [],
+    periodStart: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+    periodEnd: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
+    baseSalary: '0',
+    bonus: '0',
+    deductions: '0',
+  });
+  const [generateFormErrors, setGenerateFormErrors] = useState<Partial<Record<keyof GenerateSalaryForm, string>>>({});
+
+  const [isPaySalaryModalOpen, setIsPaySalaryModalOpen] = useState(false);
+  const [payingSalary, setPayingSalary] = useState<SalaryPayment | null>(null);
+  const [paySalaryForm, setPaySalaryForm] = useState<PaySalaryForm>({
+    paidMethod: 'wechat',
+    remark: '',
+  });
+
+  const [isSalaryDetailModalOpen, setIsSalaryDetailModalOpen] = useState(false);
+  const [viewingSalary, setViewingSalary] = useState<SalaryPayment | null>(null);
 
   const [currentWeekStart, setCurrentWeekStart] = useState(() =>
     startOfWeek(new Date(), { weekStartsOn: 1 })
@@ -697,6 +779,230 @@ export default function TechnicianSchedule() {
 
   const projectIdsList = getProjectIdsList();
 
+  const salaryAppointments = useMemo(() => {
+    const start = salaryDateRange.startDate;
+    const end = salaryDateRange.endDate;
+    return appointments.filter((a) => {
+      if (a.status !== 'completed') return false;
+      return a.date >= start && a.date <= end;
+    });
+  }, [appointments, salaryDateRange]);
+
+  const technicianSalaryCalcs = useMemo<TechnicianSalaryCalc[]>(() => {
+    return technicians.map((tech) => {
+      const techAppointments = salaryAppointments.filter(
+        (a) => a.technicianId === tech.id
+      );
+      const items: SalaryCalcItem[] = techAppointments.map((appt) => {
+        const project = projects.find((p) => p.id === appt.projectId);
+        const rate = project?.commissionRate ?? 0;
+        const commission = Math.round(appt.price * (rate / 100) * 100) / 100;
+        return {
+          appointmentId: appt.id,
+          projectId: appt.projectId,
+          projectName: project?.name ?? '未知项目',
+          serviceDate: appt.date,
+          servicePrice: appt.price,
+          commissionRate: rate,
+          commissionAmount: commission,
+        };
+      });
+      const totalCommission = items.reduce((sum, i) => sum + i.commissionAmount, 0);
+      const totalAmount = techAppointments.reduce((sum, a) => sum + a.price, 0);
+      return {
+        technicianId: tech.id,
+        technician: tech,
+        totalServiceCount: techAppointments.length,
+        totalAmount,
+        totalCommission: Math.round(totalCommission * 100) / 100,
+        items,
+      };
+    });
+  }, [technicians, salaryAppointments, projects]);
+
+  const overallSalaryStats = useMemo(() => {
+    return technicianSalaryCalcs.reduce(
+      (acc, calc) => {
+        acc.totalServiceCount += calc.totalServiceCount;
+        acc.totalAmount += calc.totalAmount;
+        acc.totalCommission += calc.totalCommission;
+        return acc;
+      },
+      {
+        totalServiceCount: 0,
+        totalAmount: 0,
+        totalCommission: 0,
+      }
+    );
+  }, [technicianSalaryCalcs]);
+
+  const filteredSalaryPayments = useMemo(() => {
+    let list = [...salaryPayments];
+    if (salaryStatusFilter !== 'all') {
+      list = list.filter((p) => p.status === salaryStatusFilter);
+    }
+    return list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }, [salaryPayments, salaryStatusFilter]);
+
+  const salaryPaymentStats = useMemo(() => {
+    const pending = salaryPayments.filter((p) => p.status === 'pending');
+    const paid = salaryPayments.filter((p) => p.status === 'paid');
+    return {
+      total: salaryPayments.length,
+      pendingCount: pending.length,
+      paidCount: paid.length,
+      pendingTotal: pending.reduce((sum, p) => sum + p.netSalary, 0),
+      paidTotal: paid.reduce((sum, p) => sum + p.netSalary, 0),
+    };
+  }, [salaryPayments]);
+
+  const openGenerateSalaryModal = () => {
+    setGenerateSalaryForm({
+      technicianIds: technicians.map((t) => t.id),
+      periodStart: salaryDateRange.startDate,
+      periodEnd: salaryDateRange.endDate,
+      baseSalary: '0',
+      bonus: '0',
+      deductions: '0',
+    });
+    setGenerateFormErrors({});
+    setIsGenerateSalaryModalOpen(true);
+  };
+
+  const validateGenerateForm = () => {
+    const errors: Partial<Record<keyof GenerateSalaryForm, string>> = {};
+    if (generateSalaryForm.technicianIds.length === 0) {
+      errors.technicianIds = '请至少选择一位技师';
+    }
+    if (!generateSalaryForm.periodStart) errors.periodStart = '请选择起始日期';
+    if (!generateSalaryForm.periodEnd) errors.periodEnd = '请选择结束日期';
+    if (
+      generateSalaryForm.periodStart &&
+      generateSalaryForm.periodEnd &&
+      generateSalaryForm.periodStart > generateSalaryForm.periodEnd
+    ) {
+      errors.periodEnd = '结束日期不能早于起始日期';
+    }
+    setGenerateFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleGenerateSalary = () => {
+    if (!validateGenerateForm()) return;
+
+    const { technicianIds, periodStart, periodEnd, baseSalary, bonus, deductions } = generateSalaryForm;
+    const bs = Number(baseSalary) || 0;
+    const bn = Number(bonus) || 0;
+    const dd = Number(deductions) || 0;
+
+    const periodAppointments = appointments.filter((a) => {
+      if (a.status !== 'completed') return false;
+      return a.date >= periodStart && a.date <= periodEnd;
+    });
+
+    technicianIds.forEach((techId) => {
+      const tech = technicians.find((t) => t.id === techId);
+      if (!tech) return;
+
+      const techAppointments = periodAppointments.filter((a) => a.technicianId === techId);
+      const items: SalaryItem[] = techAppointments.map((appt) => {
+        const project = projects.find((p) => p.id === appt.projectId);
+        const rate = project?.commissionRate ?? 0;
+        const commission = Math.round(appt.price * (rate / 100) * 100) / 100;
+        return {
+          appointmentId: appt.id,
+          projectId: appt.projectId,
+          projectName: project?.name ?? '未知项目',
+          serviceDate: appt.date,
+          servicePrice: appt.price,
+          commissionRate: rate,
+          commissionAmount: commission,
+        };
+      });
+
+      const totalCommission = items.reduce((sum, i) => sum + i.commissionAmount, 0);
+      const totalAmount = techAppointments.reduce((sum, a) => sum + a.price, 0);
+      const netSalary = Math.round((bs + totalCommission + bn - dd) * 100) / 100;
+
+      addSalaryPayment({
+        technicianId: tech.id,
+        periodStart,
+        periodEnd,
+        baseSalary: bs,
+        totalCommission: Math.round(totalCommission * 100) / 100,
+        totalServiceCount: techAppointments.length,
+        totalAmount,
+        deductions: dd,
+        bonus: bn,
+        netSalary: Math.max(0, netSalary),
+        status: 'pending',
+        items,
+      });
+    });
+
+    setIsGenerateSalaryModalOpen(false);
+  };
+
+  const openPaySalaryModal = (payment: SalaryPayment) => {
+    setPayingSalary(payment);
+    setPaySalaryForm({
+      paidMethod: 'wechat',
+      remark: '',
+    });
+    setIsPaySalaryModalOpen(true);
+  };
+
+  const handlePaySalary = () => {
+    if (!payingSalary) return;
+    markSalaryPaid(payingSalary.id, paySalaryForm.paidMethod, paySalaryForm.remark || undefined);
+    setIsPaySalaryModalOpen(false);
+  };
+
+  const openViewSalaryDetail = (payment: SalaryPayment) => {
+    setViewingSalary(payment);
+    setIsSalaryDetailModalOpen(true);
+  };
+
+  const handleSalaryDateRangePresetChange = (preset: DateRangePreset) => {
+    const today = new Date();
+    let start: Date;
+    let end: Date;
+    switch (preset) {
+      case 'today':
+        start = today;
+        end = today;
+        break;
+      case 'week':
+        start = subDays(today, 6);
+        end = today;
+        break;
+      case 'month':
+        start = startOfMonth(today);
+        end = endOfMonth(today);
+        break;
+      case 'custom':
+      default:
+        return;
+    }
+    setSalaryDateRange({
+      startDate: format(start, 'yyyy-MM-dd'),
+      endDate: format(end, 'yyyy-MM-dd'),
+      preset,
+    });
+  };
+
+  const getPaymentMethodLabel = (method: PaymentMethod) => {
+    const labels: Record<PaymentMethod, string> = {
+      cash: '现金',
+      wechat: '微信',
+      alipay: '支付宝',
+      card: '刷卡',
+      transfer: '转账',
+      other: '其他',
+    };
+    return labels[method];
+  };
+
   return (
     <div className="min-h-screen p-6 md:p-8 animate-fade-up">
       <div className="max-w-7xl mx-auto">
@@ -704,69 +1010,36 @@ export default function TechnicianSchedule() {
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
           <div className="flex-shrink-0">
             <h1 className="text-3xl font-bold text-ink-500 tracking-tight">
-              技师排班
+              技师管理
             </h1>
-            <p className="text-ink-300 mt-1">管理技师信息与排班安排</p>
+            <p className="text-ink-300 mt-1">管理技师信息、排班安排与工资发放</p>
           </div>
 
-          <div className="flex flex-col sm:flex-row lg:items-center gap-3 lg:gap-4">
-            {/* 日期导航 */}
-            <div className="flex items-center gap-2 bg-white rounded-xl border border-cream-200 px-3 py-2 shadow-card">
-              <button
-                onClick={goToPrevWeek}
-                className="p-1.5 rounded-lg text-ink-400 hover:text-ink-600 hover:bg-cream-100 transition-colors"
-                title="上一周"
-              >
-                <ChevronLeft size={18} />
-              </button>
-              <button
-                onClick={goToThisWeek}
-                className="px-3 py-1 rounded-lg text-sm font-medium text-sandalwood-600 bg-sandalwood-50 hover:bg-sandalwood-100 transition-colors"
-              >
-                本周
-              </button>
-              <span className="px-2 text-sm font-medium text-ink-500 whitespace-nowrap">
-                {weekDateRangeText}
-              </span>
-              <button
-                onClick={goToNextWeek}
-                className="p-1.5 rounded-lg text-ink-400 hover:text-ink-600 hover:bg-cream-100 transition-colors"
-                title="下一周"
-              >
-                <ChevronRight size={18} />
-              </button>
-            </div>
-
-            {/* 视图切换 */}
-            <div className="flex items-center bg-cream-100 rounded-xl p-1">
-              {(['week', 'month'] as ViewMode[]).map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => setViewMode(mode)}
-                  className={cn(
-                    'px-4 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-1.5',
-                    viewMode === mode
-                      ? 'bg-white text-ink-500 shadow-card'
-                      : 'text-ink-400 hover:text-ink-500'
-                  )}
-                >
-                  {mode === 'week' ? (
-                    <>
-                      <CalendarDays size={15} />
-                      周视图
-                    </>
-                  ) : (
-                    <>
-                      <CalendarIcon size={15} />
-                      月视图
-                    </>
-                  )}
-                </button>
-              ))}
-            </div>
-
-            {/* 操作按钮 */}
-            <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              className={cn(
+                'btn-primary flex items-center gap-2',
+                activeTab === 'salary' && 'btn-outline'
+              )}
+              onClick={() =>
+                activeTab === 'salary'
+                  ? openGenerateSalaryModal()
+                  : openAddTechnicianModal()
+              }
+            >
+              {activeTab === 'salary' ? (
+                <>
+                  <FileText size={17} />
+                  生成工资单
+                </>
+              ) : (
+                <>
+                  <UserPlus size={17} />
+                  新增技师
+                </>
+              )}
+            </button>
+            {activeTab === 'schedule' && (
               <button
                 className="btn-outline flex items-center gap-2"
                 onClick={openBatchScheduleModal}
@@ -774,16 +1047,99 @@ export default function TechnicianSchedule() {
                 <CalendarDays size={17} />
                 批量排班
               </button>
-              <button
-                className="btn-primary flex items-center gap-2"
-                onClick={openAddTechnicianModal}
-              >
-                <UserPlus size={17} />
-                新增技师
-              </button>
-            </div>
+            )}
           </div>
         </div>
+
+        {/* Tab切换 */}
+        <div className="flex items-center bg-cream-100 rounded-xl p-1 mb-6 w-fit">
+          <button
+            onClick={() => setActiveTab('schedule')}
+            className={cn(
+              'px-5 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2',
+              activeTab === 'schedule'
+                ? 'bg-white text-ink-500 shadow-card'
+                : 'text-ink-400 hover:text-ink-500'
+            )}
+          >
+            <CalendarDays size={16} />
+            排班管理
+          </button>
+          <button
+            onClick={() => setActiveTab('salary')}
+            className={cn(
+              'px-5 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2',
+              activeTab === 'salary'
+                ? 'bg-white text-ink-500 shadow-card'
+                : 'text-ink-400 hover:text-ink-500'
+            )}
+          >
+            <Wallet size={16} />
+            工资管理
+          </button>
+        </div>
+
+        {activeTab === 'schedule' && (
+          <>
+            {/* 排班视图的日期导航和视图切换 */}
+            <div className="flex flex-col sm:flex-row lg:items-center gap-3 lg:gap-4 mb-6">
+              {/* 日期导航 */}
+              <div className="flex items-center gap-2 bg-white rounded-xl border border-cream-200 px-3 py-2 shadow-card">
+                <button
+                  onClick={goToPrevWeek}
+                  className="p-1.5 rounded-lg text-ink-400 hover:text-ink-600 hover:bg-cream-100 transition-colors"
+                  title="上一周"
+                >
+                  <ChevronLeft size={18} />
+                </button>
+                <button
+                  onClick={goToThisWeek}
+                  className="px-3 py-1 rounded-lg text-sm font-medium text-sandalwood-600 bg-sandalwood-50 hover:bg-sandalwood-100 transition-colors"
+                >
+                  本周
+                </button>
+                <span className="px-2 text-sm font-medium text-ink-500 whitespace-nowrap">
+                  {weekDateRangeText}
+                </span>
+                <button
+                  onClick={goToNextWeek}
+                  className="p-1.5 rounded-lg text-ink-400 hover:text-ink-600 hover:bg-cream-100 transition-colors"
+                  title="下一周"
+                >
+                  <ChevronRight size={18} />
+                </button>
+              </div>
+
+              {/* 视图切换 */}
+              <div className="flex items-center bg-cream-100 rounded-xl p-1">
+                {(['week', 'month'] as ViewMode[]).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => setViewMode(mode)}
+                    className={cn(
+                      'px-4 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-1.5',
+                      viewMode === mode
+                        ? 'bg-white text-ink-500 shadow-card'
+                        : 'text-ink-400 hover:text-ink-500'
+                    )}
+                  >
+                    {mode === 'week' ? (
+                      <>
+                        <CalendarDays size={15} />
+                        周视图
+                      </>
+                    ) : (
+                      <>
+                        <CalendarIcon size={15} />
+                        月视图
+                      </>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
 
         {/* 技师档案卡片列表 */}
         <div className="card p-5 mb-6">
@@ -901,6 +1257,8 @@ export default function TechnicianSchedule() {
           </div>
         </div>
 
+        {activeTab === 'schedule' && (
+          <>
         {/* 日期范围搜索 & 服务统计 */}
         <div className="card p-5 mb-6">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-5">
@@ -1371,6 +1729,400 @@ export default function TechnicianSchedule() {
             </div>
           </div>
         </div>
+          </>
+        )}
+
+        {activeTab === 'salary' && (
+          <>
+            {/* 工资管理总览卡片 */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <div className="bg-gradient-to-br from-jade-50 to-jade-100/50 rounded-xl p-4 border border-jade-100">
+                <div className="flex items-center gap-2.5 mb-2">
+                  <div className="w-9 h-9 rounded-lg bg-jade-500 flex items-center justify-center shadow-sm">
+                    <FileText size={17} className="text-white" />
+                  </div>
+                  <span className="text-sm font-medium text-ink-500">工资单总数</span>
+                </div>
+                <p className="text-2xl font-bold text-jade-700">
+                  {salaryPaymentStats.total}
+                  <span className="text-sm font-normal text-ink-400 ml-1">单</span>
+                </p>
+              </div>
+              <div className="bg-gradient-to-br from-amber-50 to-amber-100/50 rounded-xl p-4 border border-amber-100">
+                <div className="flex items-center gap-2.5 mb-2">
+                  <div className="w-9 h-9 rounded-lg bg-amber-500 flex items-center justify-center shadow-sm">
+                    <Clock size={17} className="text-white" />
+                  </div>
+                  <span className="text-sm font-medium text-ink-500">待发放</span>
+                </div>
+                <p className="text-2xl font-bold text-amber-700">
+                  {salaryPaymentStats.pendingCount}
+                  <span className="text-sm font-normal text-ink-400 ml-1">单</span>
+                </p>
+                <p className="text-xs text-amber-600 mt-1">
+                  ¥{salaryPaymentStats.pendingTotal.toLocaleString()}
+                </p>
+              </div>
+              <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/50 rounded-xl p-4 border border-emerald-100">
+                <div className="flex items-center gap-2.5 mb-2">
+                  <div className="w-9 h-9 rounded-lg bg-emerald-500 flex items-center justify-center shadow-sm">
+                    <Check size={17} className="text-white" />
+                  </div>
+                  <span className="text-sm font-medium text-ink-500">已发放</span>
+                </div>
+                <p className="text-2xl font-bold text-emerald-700">
+                  {salaryPaymentStats.paidCount}
+                  <span className="text-sm font-normal text-ink-400 ml-1">单</span>
+                </p>
+                <p className="text-xs text-emerald-600 mt-1">
+                  ¥{salaryPaymentStats.paidTotal.toLocaleString()}
+                </p>
+              </div>
+              <div className="bg-gradient-to-br from-rose-50 to-rose-100/50 rounded-xl p-4 border border-rose-100">
+                <div className="flex items-center gap-2.5 mb-2">
+                  <div className="w-9 h-9 rounded-lg bg-rose-500 flex items-center justify-center shadow-sm">
+                    <Percent size={17} className="text-white" />
+                  </div>
+                  <span className="text-sm font-medium text-ink-500">本期预计提成</span>
+                </div>
+                <p className="text-2xl font-bold text-rose-700">
+                  ¥{overallSalaryStats.totalCommission.toLocaleString()}
+                </p>
+                <p className="text-xs text-rose-600 mt-1">
+                  {overallSalaryStats.totalServiceCount}次服务
+                </p>
+              </div>
+            </div>
+
+            {/* 提成预览 - 按技师 */}
+            <div className="card p-5 mb-6">
+              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-5">
+                <h2 className="text-lg font-semibold text-ink-500 flex items-center gap-2">
+                  <ClipboardList size={18} className="text-sandalwood-500" />
+                  技师提成明细（实时预览）
+                </h2>
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                  <div className="flex items-center bg-cream-100 rounded-xl p-1">
+                    {(['week', 'month'] as const).map((preset) => (
+                      <button
+                        key={preset}
+                        onClick={() => handleSalaryDateRangePresetChange(preset)}
+                        className={cn(
+                          'px-4 py-1.5 rounded-lg text-sm font-medium transition-all duration-200',
+                          salaryDateRange.preset === preset
+                            ? 'bg-white text-ink-500 shadow-card'
+                            : 'text-ink-400 hover:text-ink-500'
+                        )}
+                      >
+                        {preset === 'week' ? '本周' : '本月'}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-300" />
+                      <input
+                        type="date"
+                        value={salaryDateRange.startDate}
+                        onChange={(e) =>
+                          setSalaryDateRange((d) => ({
+                            ...d,
+                            startDate: e.target.value,
+                            preset: 'custom',
+                          }))
+                        }
+                        className="pl-9 pr-3 py-1.5 rounded-lg border border-cream-200 text-sm text-ink-500 focus:outline-none focus:ring-2 focus:ring-jade-100 focus:border-jade-300"
+                      />
+                    </div>
+                    <span className="text-ink-300">至</span>
+                    <input
+                      type="date"
+                      value={salaryDateRange.endDate}
+                      onChange={(e) =>
+                        setSalaryDateRange((d) => ({
+                          ...d,
+                          endDate: e.target.value,
+                          preset: 'custom',
+                        }))
+                      }
+                      className="px-3 py-1.5 rounded-lg border border-cream-200 text-sm text-ink-500 focus:outline-none focus:ring-2 focus:ring-jade-100 focus:border-jade-300"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="bg-cream-100">
+                      <th className="text-left px-4 py-3 text-sm font-semibold text-ink-500 whitespace-nowrap">技师</th>
+                      <th className="text-right px-4 py-3 text-sm font-semibold text-ink-500 whitespace-nowrap">服务人次</th>
+                      <th className="text-right px-4 py-3 text-sm font-semibold text-ink-500 whitespace-nowrap">服务金额</th>
+                      <th className="text-right px-4 py-3 text-sm font-semibold text-ink-500 whitespace-nowrap">提成金额</th>
+                      <th className="text-left px-4 py-3 text-sm font-semibold text-ink-500 whitespace-nowrap">提成占比</th>
+                      <th className="text-center px-4 py-3 text-sm font-semibold text-ink-500 whitespace-nowrap">明细</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {technicianSalaryCalcs.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-12 text-center text-ink-300">
+                          暂无数据
+                        </td>
+                      </tr>
+                    ) : (
+                      technicianSalaryCalcs.map((calc, idx) => {
+                        const techIdx = technicians.findIndex((t) => t.id === calc.technicianId);
+                        const commissionPct = calc.totalAmount > 0
+                          ? ((calc.totalCommission / calc.totalAmount) * 100).toFixed(1)
+                          : '0';
+                        const totalMax = Math.max(...technicianSalaryCalcs.map((c) => c.totalCommission), 1);
+                        const progressPct = (calc.totalCommission / totalMax) * 100;
+                        return (
+                          <tr
+                            key={calc.technicianId}
+                            className="border-t border-cream-200 transition-colors hover:bg-cream-50"
+                          >
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-2.5">
+                                <div
+                                  className={cn(
+                                    'w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-semibold shadow-sm bg-gradient-to-br flex-shrink-0',
+                                    getAvatarGradient(techIdx >= 0 ? techIdx : idx)
+                                  )}
+                                >
+                                  {calc.technician.name.charAt(0)}
+                                </div>
+                                <div>
+                                  <div className="font-medium text-ink-500">{calc.technician.name}</div>
+                                  {calc.technician.position && (
+                                    <div className="text-xs text-ink-300">{calc.technician.position}</div>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <span className="font-medium text-ink-600">{calc.totalServiceCount}</span>
+                              <span className="text-xs text-ink-300 ml-1">次</span>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <span className="text-sandalwood-600 font-medium">
+                                ¥{calc.totalAmount.toLocaleString()}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <span className="text-rose-600 font-bold text-lg">
+                                ¥{calc.totalCommission.toLocaleString()}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-3">
+                                <div className="flex-1 h-2 bg-cream-100 rounded-full overflow-hidden max-w-[120px]">
+                                  <div
+                                    className="h-full rounded-full bg-gradient-to-r from-rose-400 to-rose-500 transition-all duration-500"
+                                    style={{ width: `${progressPct}%` }}
+                                  />
+                                </div>
+                                <span className="text-xs text-ink-400 whitespace-nowrap">{commissionPct}%</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              {calc.items.length > 0 ? (
+                                <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                  {calc.items.length}条记录
+                                </span>
+                              ) : (
+                                <span className="text-xs text-ink-300">暂无</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                  {technicianSalaryCalcs.length > 0 && (
+                    <tfoot>
+                      <tr className="bg-cream-50 border-t-2 border-cream-200">
+                        <td className="px-4 py-3 font-semibold text-ink-500">合计</td>
+                        <td className="px-4 py-3 text-right font-semibold text-jade-600">
+                          {overallSalaryStats.totalServiceCount}次
+                        </td>
+                        <td className="px-4 py-3 text-right font-semibold text-sandalwood-600">
+                          ¥{overallSalaryStats.totalAmount.toLocaleString()}
+                        </td>
+                        <td className="px-4 py-3 text-right font-bold text-rose-600 text-lg">
+                          ¥{overallSalaryStats.totalCommission.toLocaleString()}
+                        </td>
+                        <td colSpan={2}></td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+            </div>
+
+            {/* 工资单列表 */}
+            <div className="card p-5">
+              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-5">
+                <h2 className="text-lg font-semibold text-ink-500 flex items-center gap-2">
+                  <Receipt size={18} className="text-indigo-500" />
+                  工资单记录
+                </h2>
+                <div className="flex items-center bg-cream-100 rounded-xl p-1">
+                  {(['all', 'pending', 'paid'] as SalaryStatusFilter[]).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setSalaryStatusFilter(s)}
+                      className={cn(
+                        'px-4 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-1.5',
+                        salaryStatusFilter === s
+                          ? 'bg-white text-ink-500 shadow-card'
+                          : 'text-ink-400 hover:text-ink-500'
+                      )}
+                    >
+                      {s === 'all' ? (
+                        <>
+                          <FileText size={13} />
+                          全部
+                        </>
+                      ) : s === 'pending' ? (
+                        <>
+                          <Clock size={13} />
+                          待发放
+                        </>
+                      ) : (
+                        <>
+                          <Check size={13} />
+                          已发放
+                        </>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {filteredSalaryPayments.length === 0 ? (
+                  <div className="py-16 text-center">
+                    <div className="w-16 h-16 mx-auto rounded-full bg-cream-100 flex items-center justify-center mb-4">
+                      <Wallet size={28} className="text-ink-300" />
+                    </div>
+                    <p className="text-ink-400 mb-4">暂无工资单记录</p>
+                    <button
+                      className="btn-primary inline-flex items-center gap-2"
+                      onClick={openGenerateSalaryModal}
+                    >
+                      <FileText size={16} />
+                      生成第一份工资单
+                    </button>
+                  </div>
+                ) : (
+                  filteredSalaryPayments.map((payment) => {
+                    const tech = technicians.find((t) => t.id === payment.technicianId);
+                    const techIdx = technicians.findIndex((t) => t.id === payment.technicianId);
+                    return (
+                      <div
+                        key={payment.id}
+                        className="bg-white rounded-xl border border-cream-200 p-4 hover:shadow-md hover:border-cream-300 transition-all"
+                      >
+                        <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+                          <div className="flex items-center gap-3 flex-1 min-w-0">
+                            <div
+                              className={cn(
+                                'w-11 h-11 rounded-full flex items-center justify-center text-white font-bold shadow-sm bg-gradient-to-br flex-shrink-0',
+                                getAvatarGradient(techIdx >= 0 ? techIdx : 0)
+                              )}
+                            >
+                              {tech?.name.charAt(0) ?? '?'}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <h3 className="font-semibold text-ink-500 truncate">
+                                  {tech?.name ?? '未知技师'}
+                                </h3>
+                                <span
+                                  className={cn(
+                                    'inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border',
+                                    payment.status === 'paid'
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                                  )}
+                                >
+                                  {payment.status === 'paid' ? '已发放' : '待发放'}
+                                </span>
+                              </div>
+                              <p className="text-xs text-ink-300 mt-0.5">
+                                周期：{payment.periodStart} ~ {payment.periodEnd}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 lg:gap-6">
+                            <div className="text-center">
+                              <p className="text-xs text-ink-400 mb-0.5">服务次数</p>
+                              <p className="font-semibold text-ink-600">
+                                {payment.totalServiceCount}
+                                <span className="text-xs text-ink-300 ml-0.5">次</span>
+                              </p>
+                            </div>
+                            <div className="text-center">
+                              <p className="text-xs text-ink-400 mb-0.5">提成工资</p>
+                              <p className="font-semibold text-rose-600">
+                                ¥{payment.totalCommission.toLocaleString()}
+                              </p>
+                            </div>
+                            <div className="text-center">
+                              <p className="text-xs text-ink-400 mb-0.5">基本/奖金/扣款</p>
+                              <p className="text-xs">
+                                <span className="text-jade-600">¥{payment.baseSalary}</span>
+                                <span className="text-ink-300 mx-1">/</span>
+                                <span className="text-amber-600">+¥{payment.bonus}</span>
+                                <span className="text-ink-300 mx-1">/</span>
+                                <span className="text-red-500">-¥{payment.deductions}</span>
+                              </p>
+                            </div>
+                            <div className="text-center border-l lg:border-l-0 lg:border-l-2 lg:pl-6 border-cream-200">
+                              <p className="text-xs text-ink-400 mb-0.5">实发工资</p>
+                              <p className="text-xl font-bold text-sandalwood-600">
+                                ¥{payment.netSalary.toLocaleString()}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex lg:flex-col items-center lg:items-end gap-2 lg:gap-1.5">
+                            <button
+                              className="btn-outline flex items-center gap-1.5 text-sm"
+                              onClick={() => openViewSalaryDetail(payment)}
+                            >
+                              <Eye size={14} />
+                              查看明细
+                            </button>
+                            {payment.status === 'pending' && (
+                              <button
+                                className="btn-primary flex items-center gap-1.5 text-sm"
+                                onClick={() => openPaySalaryModal(payment)}
+                              >
+                                <Send size={14} />
+                                发放工资
+                              </button>
+                            )}
+                            {payment.status === 'paid' && payment.paidMethod && (
+                              <p className="text-xs text-ink-400">
+                                {payment.paidAt && format(new Date(payment.paidAt), 'MM-dd HH:mm')}
+                                <span className="mx-1">·</span>
+                                {getPaymentMethodLabel(payment.paidMethod)}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* 新增/编辑技师 Modal */}
@@ -2290,6 +3042,567 @@ export default function TechnicianSchedule() {
                 <button
                   className="btn-primary"
                   onClick={() => setIsTechnicianStatsModalOpen(false)}
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* 生成工资单 Modal */}
+      {isGenerateSalaryModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-ink-900/50 backdrop-blur-sm animate-fade-in"
+            onClick={() => setIsGenerateSalaryModalOpen(false)}
+          />
+          <div className="relative bg-white rounded-2xl shadow-modal w-full max-w-2xl max-h-[90vh] overflow-hidden animate-fade-up">
+            <div className="flex items-center justify-between px-6 py-5 border-b border-cream-200">
+              <div>
+                <h2 className="text-xl font-bold text-ink-500">生成工资单</h2>
+                <p className="text-sm text-ink-300 mt-0.5">按周期统计技师提成并生成工资单</p>
+              </div>
+              <button
+                onClick={() => setIsGenerateSalaryModalOpen(false)}
+                className="p-2 rounded-lg text-ink-300 hover:text-ink-500 hover:bg-cream-100 transition-all"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="px-6 py-5 overflow-y-auto max-h-[calc(90vh-160px)] space-y-5">
+              {/* 选择技师 */}
+              <div>
+                <label className="block text-sm font-medium text-ink-500 mb-2">
+                  选择技师 <span className="text-red-500">*</span>
+                </label>
+                <div
+                  className={cn(
+                    'border rounded-xl p-4 bg-cream-50 max-h-44 overflow-y-auto',
+                    generateFormErrors.technicianIds
+                      ? 'border-red-300'
+                      : 'border-cream-200'
+                  )}
+                >
+                  {technicians.length === 0 ? (
+                    <p className="text-sm text-ink-300 text-center py-4">暂无技师数据</p>
+                  ) : (
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                      {technicians.map((tech) => {
+                        const checked = generateSalaryForm.technicianIds.includes(tech.id);
+                        return (
+                          <label
+                            key={tech.id}
+                            className={cn(
+                              'flex items-center gap-2.5 p-2.5 rounded-lg cursor-pointer transition-all duration-200 border',
+                              checked
+                                ? 'bg-jade-50 border-jade-300'
+                                : 'bg-white border-cream-200 hover:border-cream-300'
+                            )}
+                          >
+                            <div
+                              className={cn(
+                                'w-4 h-4 rounded border-2 flex items-center justify-center transition-all',
+                                checked
+                                  ? 'bg-jade-500 border-jade-500'
+                                  : 'border-ink-300'
+                              )}
+                            >
+                              {checked && <Check size={10} className="text-white" />}
+                            </div>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                const ids = e.target.checked
+                                  ? [...generateSalaryForm.technicianIds, tech.id]
+                                  : generateSalaryForm.technicianIds.filter(
+                                      (id) => id !== tech.id
+                                    );
+                                setGenerateSalaryForm((f) => ({
+                                  ...f,
+                                  technicianIds: ids,
+                                }));
+                              }}
+                              className="sr-only"
+                            />
+                            <span className="text-sm font-medium text-ink-500 truncate">
+                              {tech.name}
+                              {tech.position && (
+                                <span className="text-ink-300 ml-1 text-xs">
+                                  ({tech.position})
+                                </span>
+                              )}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+                {generateFormErrors.technicianIds && (
+                  <p className="text-red-500 text-xs mt-1">{generateFormErrors.technicianIds}</p>
+                )}
+              </div>
+
+              {/* 日期范围 */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-ink-500 mb-1.5">
+                    起始日期 <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={generateSalaryForm.periodStart}
+                    onChange={(e) =>
+                      setGenerateSalaryForm((f) => ({
+                        ...f,
+                        periodStart: e.target.value,
+                      }))
+                    }
+                    className={cn(
+                      'input-field',
+                      generateFormErrors.periodStart &&
+                        'border-red-400 focus:border-red-400 focus:ring-red-100'
+                    )}
+                  />
+                  {generateFormErrors.periodStart && (
+                    <p className="text-red-500 text-xs mt-1">{generateFormErrors.periodStart}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-ink-500 mb-1.5">
+                    结束日期 <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={generateSalaryForm.periodEnd}
+                    onChange={(e) =>
+                      setGenerateSalaryForm((f) => ({
+                        ...f,
+                        periodEnd: e.target.value,
+                      }))
+                    }
+                    className={cn(
+                      'input-field',
+                      generateFormErrors.periodEnd &&
+                        'border-red-400 focus:border-red-400 focus:ring-red-100'
+                    )}
+                  />
+                  {generateFormErrors.periodEnd && (
+                    <p className="text-red-500 text-xs mt-1">{generateFormErrors.periodEnd}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* 工资参数 */}
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-ink-500 mb-1.5">
+                    基本工资(¥)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={generateSalaryForm.baseSalary}
+                    onChange={(e) =>
+                      setGenerateSalaryForm((f) => ({
+                        ...f,
+                        baseSalary: e.target.value,
+                      }))
+                    }
+                    placeholder="0"
+                    className="input-field"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-ink-500 mb-1.5">
+                    奖金(¥)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={generateSalaryForm.bonus}
+                    onChange={(e) =>
+                      setGenerateSalaryForm((f) => ({
+                        ...f,
+                        bonus: e.target.value,
+                      }))
+                    }
+                    placeholder="0"
+                    className="input-field"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-ink-500 mb-1.5">
+                    扣款(¥)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={generateSalaryForm.deductions}
+                    onChange={(e) =>
+                      setGenerateSalaryForm((f) => ({
+                        ...f,
+                        deductions: e.target.value,
+                      }))
+                    }
+                    placeholder="0"
+                    className="input-field"
+                  />
+                </div>
+              </div>
+
+              {/* 工资预览说明 */}
+              <div className="bg-cream-50 rounded-xl p-4 border border-cream-200">
+                <h3 className="text-sm font-semibold text-ink-500 mb-2 flex items-center gap-1.5">
+                  <Coins size={15} className="text-gold-500" />
+                  工资计算说明
+                </h3>
+                <ul className="space-y-1 text-xs text-ink-400">
+                  <li>• 提成工资 = Σ(项目价格 × 项目提成比例)</li>
+                  <li>• 仅统计状态为「已完成」的服务订单</li>
+                  <li>• 实发工资 = 基本工资 + 提成工资 + 奖金 - 扣款</li>
+                  <li>• 提成比例可在「项目管理」中为每个项目设置</li>
+                </ul>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-cream-200 bg-cream-50">
+              <button
+                className="btn-ghost"
+                onClick={() => setIsGenerateSalaryModalOpen(false)}
+              >
+                取消
+              </button>
+              <button className="btn-primary" onClick={handleGenerateSalary}>
+                生成工资单
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 发放工资 Modal */}
+      {isPaySalaryModalOpen && payingSalary && (() => {
+        const tech = technicians.find((t) => t.id === payingSalary.technicianId);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-ink-900/50 backdrop-blur-sm animate-fade-in"
+              onClick={() => setIsPaySalaryModalOpen(false)}
+            />
+            <div className="relative bg-white rounded-2xl shadow-modal w-full max-w-md overflow-hidden animate-fade-up">
+              <div className="flex items-center justify-between px-6 py-5 border-b border-cream-200">
+                <div>
+                  <h2 className="text-xl font-bold text-ink-500">确认发放工资</h2>
+                  <p className="text-sm text-ink-300 mt-0.5">
+                    {tech?.name} · {payingSalary.periodStart} ~ {payingSalary.periodEnd}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setIsPaySalaryModalOpen(false)}
+                  className="p-2 rounded-lg text-ink-300 hover:text-ink-500 hover:bg-cream-100 transition-all"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="px-6 py-5 space-y-5">
+                {/* 工资汇总 */}
+                <div className="bg-gradient-to-br from-gold-50 to-sandalwood-50 rounded-xl p-4 border border-gold-100">
+                  <p className="text-xs text-gold-600 mb-1">本次实发金额</p>
+                  <p className="text-3xl font-bold text-gold-700">
+                    ¥{payingSalary.netSalary.toLocaleString()}
+                  </p>
+                </div>
+
+                {/* 明细 */}
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-ink-400">服务次数</span>
+                    <span className="text-ink-600 font-medium">{payingSalary.totalServiceCount}次</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-400">提成工资</span>
+                    <span className="text-rose-600 font-medium">¥{payingSalary.totalCommission.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-400">基本工资</span>
+                    <span className="text-jade-600 font-medium">¥{payingSalary.baseSalary.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-400">奖金</span>
+                    <span className="text-amber-600 font-medium">+¥{payingSalary.bonus.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-400">扣款</span>
+                    <span className="text-red-500 font-medium">-¥{payingSalary.deductions.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="divider-x" />
+
+                {/* 发放方式 */}
+                <div>
+                  <label className="block text-sm font-medium text-ink-500 mb-2">
+                    发放方式 <span className="text-red-500">*</span>
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['cash', 'wechat', 'alipay', 'transfer', 'bank', 'other'] as const).filter(m => m !== 'bank').map((method) => {
+                      const selected = paySalaryForm.paidMethod === method;
+                      return (
+                        <button
+                          key={method}
+                          type="button"
+                          onClick={() =>
+                            setPaySalaryForm((f) => ({ ...f, paidMethod: method }))
+                          }
+                          className={cn(
+                            'p-3 rounded-xl border-2 text-center transition-all duration-200',
+                            selected
+                              ? 'bg-jade-50 border-jade-300 text-jade-700'
+                              : 'bg-white border-cream-200 text-ink-400 hover:border-cream-300'
+                          )}
+                        >
+                          <span className="text-sm font-medium">
+                            {getPaymentMethodLabel(method)}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 备注 */}
+                <div>
+                  <label className="block text-sm font-medium text-ink-500 mb-1.5">
+                    备注
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={paySalaryForm.remark}
+                    onChange={(e) =>
+                      setPaySalaryForm((f) => ({ ...f, remark: e.target.value }))
+                    }
+                    placeholder="请输入备注信息（可选）"
+                    className="input-field resize-none"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-cream-200 bg-cream-50">
+                <button
+                  className="btn-ghost"
+                  onClick={() => setIsPaySalaryModalOpen(false)}
+                >
+                  取消
+                </button>
+                <button className="btn-primary" onClick={handlePaySalary}>
+                  确认发放
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* 工资单明细 Modal */}
+      {isSalaryDetailModalOpen && viewingSalary && (() => {
+        const tech = technicians.find((t) => t.id === viewingSalary.technicianId);
+        const techIdx = technicians.findIndex((t) => t.id === viewingSalary.technicianId);
+        const sortedItems = [...viewingSalary.items].sort(
+          (a, b) => b.serviceDate.localeCompare(a.serviceDate)
+        );
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-ink-900/50 backdrop-blur-sm animate-fade-in"
+              onClick={() => setIsSalaryDetailModalOpen(false)}
+            />
+            <div className="relative bg-white rounded-2xl shadow-modal w-full max-w-3xl max-h-[90vh] overflow-hidden animate-fade-up">
+              <div className="flex items-center justify-between px-6 py-5 border-b border-cream-200">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={cn(
+                      'w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-md bg-gradient-to-br',
+                      getAvatarGradient(techIdx >= 0 ? techIdx : 0)
+                    )}
+                  >
+                    {tech?.name.charAt(0) ?? '?'}
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-ink-500">
+                      {tech?.name ?? '未知技师'}
+                      <span
+                        className={cn(
+                          'ml-3 inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium border',
+                          viewingSalary.status === 'paid'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : 'bg-amber-50 text-amber-700 border-amber-200'
+                        )}
+                      >
+                        {viewingSalary.status === 'paid' ? '已发放' : '待发放'}
+                      </span>
+                    </h2>
+                    <p className="text-sm text-ink-300 mt-0.5">
+                      工资周期：{viewingSalary.periodStart} ~ {viewingSalary.periodEnd}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsSalaryDetailModalOpen(false)}
+                  className="p-2 rounded-lg text-ink-300 hover:text-ink-500 hover:bg-cream-100 transition-all"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* 工资汇总 */}
+              <div className="px-6 py-4 bg-gradient-to-r from-cream-50 to-white border-b border-cream-200">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                  <div className="bg-white rounded-xl p-3 border border-cream-100">
+                    <p className="text-xs text-ink-400 mb-1">服务次数</p>
+                    <p className="text-lg font-bold text-jade-600">
+                      {viewingSalary.totalServiceCount}
+                      <span className="text-xs font-normal ml-0.5">次</span>
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-xl p-3 border border-cream-100">
+                    <p className="text-xs text-ink-400 mb-1">服务总额</p>
+                    <p className="text-lg font-bold text-sandalwood-600">
+                      ¥{viewingSalary.totalAmount.toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-xl p-3 border border-cream-100">
+                    <p className="text-xs text-ink-400 mb-1">提成工资</p>
+                    <p className="text-lg font-bold text-rose-600">
+                      ¥{viewingSalary.totalCommission.toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-xl p-3 border border-cream-100">
+                    <p className="text-xs text-ink-400 mb-1">基/奖/扣</p>
+                    <p className="text-sm font-medium">
+                      <span className="text-jade-600">¥{viewingSalary.baseSalary}</span>
+                      <span className="text-ink-300 mx-0.5">/</span>
+                      <span className="text-amber-600">+{viewingSalary.bonus}</span>
+                      <span className="text-ink-300 mx-0.5">/</span>
+                      <span className="text-red-500">-{viewingSalary.deductions}</span>
+                    </p>
+                  </div>
+                  <div className="bg-gradient-to-br from-gold-50 to-sandalwood-50 rounded-xl p-3 border border-gold-200">
+                    <p className="text-xs text-gold-600 mb-1">实发工资</p>
+                    <p className="text-xl font-bold text-gold-700">
+                      ¥{viewingSalary.netSalary.toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+                {viewingSalary.status === 'paid' && viewingSalary.paidAt && (
+                  <div className="mt-3 flex items-center gap-4 text-xs text-ink-400">
+                    <span className="flex items-center gap-1">
+                      <CreditCard size={12} />
+                      发放方式：{viewingSalary.paidMethod && getPaymentMethodLabel(viewingSalary.paidMethod)}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Clock size={12} />
+                      发放时间：{format(new Date(viewingSalary.paidAt), 'yyyy-MM-dd HH:mm')}
+                    </span>
+                    {viewingSalary.remark && (
+                      <span className="flex items-center gap-1">
+                        <FileText size={12} />
+                        备注：{viewingSalary.remark}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* 提成明细列表 */}
+              <div className="px-6 py-4 overflow-y-auto max-h-[calc(90vh-400px)]">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-semibold text-ink-500 flex items-center gap-2">
+                    <ClipboardList size={16} className="text-ink-400" />
+                    提成明细
+                    <span className="text-sm font-normal text-ink-300">
+                      ({sortedItems.length}条)
+                    </span>
+                  </h3>
+                </div>
+
+                {sortedItems.length === 0 ? (
+                  <div className="py-16 text-center">
+                    <div className="w-16 h-16 mx-auto rounded-full bg-cream-100 flex items-center justify-center mb-4">
+                      <ClipboardList size={28} className="text-ink-300" />
+                    </div>
+                    <p className="text-ink-400">该周期内暂无提成明细</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="bg-cream-100">
+                          <th className="text-left px-3 py-2.5 text-xs font-semibold text-ink-500 whitespace-nowrap">服务日期</th>
+                          <th className="text-left px-3 py-2.5 text-xs font-semibold text-ink-500 whitespace-nowrap">服务项目</th>
+                          <th className="text-right px-3 py-2.5 text-xs font-semibold text-ink-500 whitespace-nowrap">服务金额</th>
+                          <th className="text-right px-3 py-2.5 text-xs font-semibold text-ink-500 whitespace-nowrap">提成比例</th>
+                          <th className="text-right px-3 py-2.5 text-xs font-semibold text-ink-500 whitespace-nowrap">提成金额</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedItems.map((item) => (
+                          <tr
+                            key={item.appointmentId}
+                            className="border-t border-cream-100 hover:bg-cream-50 transition-colors"
+                          >
+                            <td className="px-3 py-2.5 text-sm text-ink-500 whitespace-nowrap">
+                              {item.serviceDate}
+                            </td>
+                            <td className="px-3 py-2.5 text-sm text-ink-600 font-medium">
+                              {item.projectName}
+                            </td>
+                            <td className="px-3 py-2.5 text-sm text-right text-sandalwood-600">
+                              ¥{item.servicePrice.toLocaleString()}
+                            </td>
+                            <td className="px-3 py-2.5 text-sm text-right">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-700">
+                                {item.commissionRate}%
+                              </span>
+                            </td>
+                            <td className="px-3 py-2.5 text-sm text-right font-semibold text-rose-600">
+                              ¥{item.commissionAmount.toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-cream-50 border-t-2 border-cream-200">
+                          <td colSpan={2} className="px-3 py-2.5 text-sm font-semibold text-ink-500">
+                            合计
+                          </td>
+                          <td className="px-3 py-2.5 text-sm text-right font-semibold text-sandalwood-600">
+                            ¥{viewingSalary.totalAmount.toLocaleString()}
+                          </td>
+                          <td></td>
+                          <td className="px-3 py-2.5 text-sm text-right font-bold text-rose-600">
+                            ¥{viewingSalary.totalCommission.toLocaleString()}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between px-6 py-4 border-t border-cream-200 bg-cream-50">
+                <div className="text-xs text-ink-400">
+                  工资单编号：{viewingSalary.id}
+                  <span className="mx-2">·</span>
+                  创建时间：{format(new Date(viewingSalary.createdAt), 'yyyy-MM-dd HH:mm')}
+                </div>
+                <button
+                  className="btn-primary"
+                  onClick={() => setIsSalaryDetailModalOpen(false)}
                 >
                   关闭
                 </button>

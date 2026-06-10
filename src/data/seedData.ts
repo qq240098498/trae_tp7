@@ -8,6 +8,7 @@ import type {
   CardType,
   MembershipCard,
   Transaction,
+  SalaryPayment,
 } from '@/types';
 
 export const seedCustomers: Customer[] = [
@@ -46,19 +47,19 @@ export const seedProjectCategories: ProjectCategory[] = [
 
 export const seedProjects: Project[] = [
   {
-    id: 'p1', name: '全身推拿', categoryId: 'pc1', price: 168, duration: 60, description: '60分钟全身中式推拿', sort: 1, isActive: true,
+    id: 'p1', name: '全身推拿', categoryId: 'pc1', price: 168, duration: 60, commissionRate: 35, description: '60分钟全身中式推拿', sort: 1, isActive: true,
   },
   {
-    id: 'p2', name: '肩颈推拿', categoryId: 'pc1', price: 98, duration: 30, description: '30分钟肩颈专项按摩', sort: 2, isActive: true,
+    id: 'p2', name: '肩颈推拿', categoryId: 'pc1', price: 98, duration: 30, commissionRate: 30, description: '30分钟肩颈专项按摩', sort: 2, isActive: true,
   },
   {
-    id: 'p3', name: '中药足浴', categoryId: 'pc2', price: 88, duration: 60, description: '60分钟中药泡脚+足底按摩', sort: 1, isActive: true,
+    id: 'p3', name: '中药足浴', categoryId: 'pc2', price: 88, duration: 60, commissionRate: 25, description: '60分钟中药泡脚+足底按摩', sort: 1, isActive: true,
   },
   {
-    id: 'p4', name: '精油开背', categoryId: 'pc3', price: 128, duration: 45, description: '45分钟精油艾灸背部调理', sort: 1, isActive: true,
+    id: 'p4', name: '精油开背', categoryId: 'pc3', price: 128, duration: 45, commissionRate: 40, description: '45分钟精油艾灸背部调理', sort: 1, isActive: true,
   },
   {
-    id: 'p5', name: '刮痧拔罐套餐', categoryId: 'pc4', price: 68, duration: 30, description: '刮痧+拔罐组合', sort: 1, isActive: true,
+    id: 'p5', name: '刮痧拔罐套餐', categoryId: 'pc4', price: 68, duration: 30, commissionRate: 30, description: '刮痧+拔罐组合', sort: 1, isActive: true,
   },
 ];
 
@@ -224,6 +225,8 @@ export const seedTransactions: Transaction[] = [
   },
 ];
 
+export const seedSalaryPayments: SalaryPayment[] = [];
+
 export interface SeedData {
   customers: Customer[];
   projectCategories: ProjectCategory[];
@@ -234,6 +237,7 @@ export interface SeedData {
   cardTypes: CardType[];
   membershipCards: MembershipCard[];
   transactions: Transaction[];
+  salaryPayments: SalaryPayment[];
 }
 
 export const seedData: SeedData = {
@@ -246,6 +250,7 @@ export const seedData: SeedData = {
   appointments: seedAppointments,
   membershipCards: seedMembershipCards,
   transactions: seedTransactions,
+  salaryPayments: seedSalaryPayments,
 };
 
 export default seedData;

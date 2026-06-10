@@ -32,6 +32,7 @@ interface ProjectFormData {
   categoryId: string;
   duration: string;
   price: string;
+  commissionRate: string;
   description: string;
   technicianIds: string[];
   isActive: boolean;
@@ -75,6 +76,7 @@ export default function ProjectManagement() {
     categoryId: '',
     duration: '',
     price: '',
+    commissionRate: '30',
     description: '',
     technicianIds: [],
     isActive: true,
@@ -127,6 +129,7 @@ export default function ProjectManagement() {
       categoryId: sortedCategories[0]?.id ?? '',
       duration: '',
       price: '',
+      commissionRate: '30',
       description: '',
       technicianIds: [],
       isActive: true,
@@ -143,6 +146,7 @@ export default function ProjectManagement() {
       categoryId: project.categoryId,
       duration: String(project.duration),
       price: String(project.price),
+      commissionRate: String(project.commissionRate ?? 30),
       description: project.description ?? '',
       technicianIds: techIds,
       isActive: project.isActive,
@@ -157,6 +161,10 @@ export default function ProjectManagement() {
     if (!projectForm.categoryId) errors.categoryId = '请选择所属分类';
     if (!projectForm.duration || Number(projectForm.duration) <= 0) errors.duration = '时长必须大于0';
     if (!projectForm.price || Number(projectForm.price) <= 0) errors.price = '价格必须大于0';
+    const rate = Number(projectForm.commissionRate);
+    if (projectForm.commissionRate === '' || isNaN(rate) || rate < 0 || rate > 100) {
+      errors.commissionRate = '提成比例必须在0-100之间';
+    }
     setProjectFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -169,6 +177,7 @@ export default function ProjectManagement() {
       categoryId: projectForm.categoryId,
       duration: Number(projectForm.duration),
       price: Number(projectForm.price),
+      commissionRate: Number(projectForm.commissionRate),
       description: projectForm.description.trim() || undefined,
       isActive: projectForm.isActive,
     };
@@ -403,6 +412,7 @@ export default function ProjectManagement() {
                   <th className="text-left px-6 py-4 text-sm font-semibold text-ink-500 whitespace-nowrap">分类</th>
                   <th className="text-left px-6 py-4 text-sm font-semibold text-ink-500 whitespace-nowrap">时长(分钟)</th>
                   <th className="text-left px-6 py-4 text-sm font-semibold text-ink-500 whitespace-nowrap">价格(¥)</th>
+                  <th className="text-left px-6 py-4 text-sm font-semibold text-ink-500 whitespace-nowrap">提成比例</th>
                   <th className="text-left px-6 py-4 text-sm font-semibold text-ink-500 whitespace-nowrap">适用技师</th>
                   <th className="text-left px-6 py-4 text-sm font-semibold text-ink-500 whitespace-nowrap">状态</th>
                   <th className="text-right px-6 py-4 text-sm font-semibold text-ink-500 whitespace-nowrap">操作</th>
@@ -411,7 +421,7 @@ export default function ProjectManagement() {
               <tbody>
                 {filteredProjects.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-16 text-center text-ink-300">
+                    <td colSpan={8} className="px-6 py-16 text-center text-ink-300">
                       暂无项目数据
                     </td>
                   </tr>
@@ -436,6 +446,11 @@ export default function ProjectManagement() {
                         </td>
                         <td className="px-6 py-4 text-ink-500">{project.duration}</td>
                         <td className="px-6 py-4 font-medium text-sandalwood-600">¥{project.price}</td>
+                        <td className="px-6 py-4">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium bg-rose-50 text-rose-700 border border-rose-100">
+                            {project.commissionRate ?? 0}%
+                          </span>
+                        </td>
                         <td className="px-6 py-4">
                           <div
                             className="relative group inline-block"
@@ -555,7 +570,7 @@ export default function ProjectManagement() {
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   <div>
                     <label className="block text-sm font-medium text-ink-500 mb-1.5">
                       时长(分钟) <span className="text-red-500">*</span>
@@ -587,6 +602,24 @@ export default function ProjectManagement() {
                     />
                     {projectFormErrors.price && (
                       <p className="text-red-500 text-xs mt-1">{projectFormErrors.price}</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-ink-500 mb-1.5">
+                      提成比例(%) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={projectForm.commissionRate}
+                      onChange={(e) => setProjectForm((f) => ({ ...f, commissionRate: e.target.value }))}
+                      placeholder="30"
+                      className={cn('input-field', projectFormErrors.commissionRate && 'border-red-400 focus:border-red-400 focus:ring-red-100')}
+                    />
+                    {projectFormErrors.commissionRate && (
+                      <p className="text-red-500 text-xs mt-1">{projectFormErrors.commissionRate}</p>
                     )}
                   </div>
                 </div>

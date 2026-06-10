@@ -11,6 +11,8 @@ import type {
   MembershipCard,
   Transaction,
   ProjectCategory,
+  SalaryPayment,
+  PaymentMethod,
 } from '@/types';
 
 const STORAGE_KEY = 'physiotherapy-app-store';
@@ -26,6 +28,7 @@ export interface AppState {
   cardTypes: CardType[];
   membershipCards: MembershipCard[];
   transactions: Transaction[];
+  salaryPayments: SalaryPayment[];
 }
 
 export interface AppActions {
@@ -50,6 +53,9 @@ export interface AppActions {
   addMembershipCard: (card: Omit<MembershipCard, 'id' | 'createdAt'>) => void;
   useMembershipCard: (id: string, deduct?: { balance?: number; times?: number }) => void;
   addTransaction: (transaction: Omit<Transaction, 'id' | 'createdAt'>) => void;
+  addSalaryPayment: (payment: Omit<SalaryPayment, 'id' | 'createdAt'>) => void;
+  updateSalaryPayment: (id: string, data: Partial<SalaryPayment>) => void;
+  markSalaryPaid: (id: string, paidMethod: PaymentMethod, remark?: string) => void;
 }
 
 const generateId = (prefix: string) =>
@@ -68,6 +74,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   cardTypes: [],
   membershipCards: [],
   transactions: [],
+  salaryPayments: [],
 
   saveToStorage: () => {
     const { initialized, ...data } = get();
@@ -86,10 +93,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
+        const migratedProjects = (parsed.projects || []).map((p: any) => ({
+          ...p,
+          commissionRate: typeof p.commissionRate === 'number' ? p.commissionRate : 30,
+        }));
+        const migratedSalaryPayments = parsed.salaryPayments || [];
         set({
           ...parsed,
+          projects: migratedProjects,
+          salaryPayments: migratedSalaryPayments,
           initialized: true,
         });
+        get().saveToStorage();
       } else {
         set({
           customers: [...seedData.customers],
@@ -101,6 +116,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           cardTypes: [...seedData.cardTypes],
           membershipCards: [...seedData.membershipCards],
           transactions: [...seedData.transactions],
+          salaryPayments: [...(seedData as any).salaryPayments || []],
           initialized: true,
         });
         get().saveToStorage();
@@ -117,6 +133,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         cardTypes: [...seedData.cardTypes],
         membershipCards: [...seedData.membershipCards],
         transactions: [...seedData.transactions],
+        salaryPayments: [...(seedData as any).salaryPayments || []],
         initialized: true,
       });
     }
@@ -134,6 +151,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       cardTypes: [...seedData.cardTypes],
       membershipCards: [...seedData.membershipCards],
       transactions: [...seedData.transactions],
+      salaryPayments: [...(seedData as any).salaryPayments || []],
       initialized: true,
     });
     get().saveToStorage();
@@ -316,6 +334,44 @@ export const useAppStore = create<AppStore>((set, get) => ({
       createdAt: new Date().toISOString(),
     };
     set((s) => ({ transactions: [...s.transactions, newTransaction] }));
+    get().saveToStorage();
+  },
+
+  addSalaryPayment: (payment) => {
+    const newPayment: SalaryPayment = {
+      ...payment,
+      id: generateId('sp'),
+      createdAt: new Date().toISOString(),
+    };
+    set((s) => ({ salaryPayments: [...s.salaryPayments, newPayment] }));
+    get().saveToStorage();
+  },
+
+  updateSalaryPayment: (id, data) => {
+    set((s) => ({
+      salaryPayments: s.salaryPayments.map((p) =>
+        p.id === id ? { ...p, ...data } : p
+      ),
+    }));
+    get().saveToStorage();
+  },
+
+  markSalaryPaid: (id, paidMethod, remark) => {
+    const existing = get().salaryPayments.find((p) => p.id === id);
+    if (!existing) return;
+    set((s) => ({
+      salaryPayments: s.salaryPayments.map((p) =>
+        p.id === id
+          ? {
+              ...p,
+              status: 'paid',
+              paidAt: new Date().toISOString(),
+              paidMethod,
+              remark: remark || p.remark,
+            }
+          : p
+      ),
+    }));
     get().saveToStorage();
   },
 }));

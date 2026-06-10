@@ -22,6 +22,7 @@ export interface Project {
   categoryId: string;
   price: number;
   duration: number;
+  commissionRate: number;
   description?: string;
   image?: string;
   sort?: number;
@@ -127,4 +128,36 @@ export interface Transaction {
   cardDeduction?: number;
   remark?: string;
   createdAt: string;
+}
+
+export type SalaryStatus = 'pending' | 'paid';
+
+export interface SalaryPayment {
+  id: string;
+  technicianId: string;
+  periodStart: string;
+  periodEnd: string;
+  baseSalary: number;
+  totalCommission: number;
+  totalServiceCount: number;
+  totalAmount: number;
+  deductions: number;
+  bonus: number;
+  netSalary: number;
+  status: SalaryStatus;
+  paidAt?: string;
+  paidMethod?: PaymentMethod;
+  remark?: string;
+  items: SalaryItem[];
+  createdAt: string;
+}
+
+export interface SalaryItem {
+  appointmentId: string;
+  projectId: string;
+  projectName: string;
+  serviceDate: string;
+  servicePrice: number;
+  commissionRate: number;
+  commissionAmount: number;
 }
