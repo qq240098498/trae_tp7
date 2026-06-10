@@ -167,6 +167,7 @@ export default function TechnicianSchedule() {
     updateTechnician,
     addSchedule,
     updateSchedule,
+    deleteSchedule,
   } = useAppStore();
 
   const [currentWeekStart, setCurrentWeekStart] = useState(() =>
@@ -257,6 +258,19 @@ export default function TechnicianSchedule() {
     const dayOfWeek = date.getDay();
     if (!technician.workDays.includes(dayOfWeek)) return 'rest';
     return detectShift(technician.startTime, technician.endTime);
+  };
+
+  const resolveCellShift = (
+    cellSchedules: ScheduleType[],
+    technician: Technician,
+    date: Date
+  ): { shift: ShiftType; override: boolean } => {
+    if (cellSchedules.length === 0) {
+      return { shift: getShiftForCell(technician, date), override: false };
+    }
+    const active = cellSchedules.find((s) => s.isAvailable);
+    if (!active) return { shift: 'rest', override: true };
+    return { shift: detectShift(active.startTime, active.endTime), override: true };
   };
 
   const getProjectName = (projectId: string) =>
@@ -369,24 +383,38 @@ export default function TechnicianSchedule() {
 
   const handleSaveSchedule = () => {
     const shiftCfg = SHIFT_CONFIG[scheduleForm.shift];
+    const existingForDay = schedules.filter(
+      (s) =>
+        s.technicianId === scheduleForm.technicianId &&
+        s.date === scheduleForm.date
+    );
+
     if (scheduleForm.shift === 'rest') {
-      const existingSchedules = schedules.filter(
-        (s) =>
-          s.technicianId === scheduleForm.technicianId &&
-          s.date === scheduleForm.date
+      existingForDay.forEach((s) =>
+        updateSchedule(s.id, {
+          startTime: '',
+          endTime: '',
+          isAvailable: false,
+        })
       );
-      existingSchedules.forEach((s) => updateSchedule(s.id, { isAvailable: false }));
+      if (existingForDay.length === 0) {
+        addSchedule({
+          technicianId: scheduleForm.technicianId,
+          date: scheduleForm.date,
+          startTime: '',
+          endTime: '',
+          isAvailable: false,
+        });
+      }
     } else {
-      const existing = schedules.find(
-        (s) =>
-          s.technicianId === scheduleForm.technicianId &&
-          s.date === scheduleForm.date &&
-          s.startTime === shiftCfg.startTime &&
-          s.endTime === shiftCfg.endTime
-      );
-      if (existing) {
-        updateSchedule(existing.id, { isAvailable: true });
+      if (existingForDay.length === 1) {
+        updateSchedule(existingForDay[0].id, {
+          startTime: shiftCfg.startTime,
+          endTime: shiftCfg.endTime,
+          isAvailable: true,
+        });
       } else {
+        existingForDay.forEach((s) => deleteSchedule(s.id));
         addSchedule({
           technicianId: scheduleForm.technicianId,
           date: scheduleForm.date,
@@ -439,24 +467,36 @@ export default function TechnicianSchedule() {
     batchScheduleForm.technicianIds.forEach((techId) => {
       for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
         const dateStr = format(d, 'yyyy-MM-dd');
+        const existingForDay = schedules.filter(
+          (s) => s.technicianId === techId && s.date === dateStr
+        );
         if (batchScheduleForm.shift === 'rest') {
-          const existingSchedules = schedules.filter(
-            (s) => s.technicianId === techId && s.date === dateStr
-          );
-          existingSchedules.forEach((s) =>
-            updateSchedule(s.id, { isAvailable: false })
-          );
-        } else {
-          const existing = schedules.find(
-            (s) =>
-              s.technicianId === techId &&
-              s.date === dateStr &&
-              s.startTime === shiftCfg.startTime &&
-              s.endTime === shiftCfg.endTime
-          );
-          if (existing) {
-            updateSchedule(existing.id, { isAvailable: true });
+          if (existingForDay.length > 0) {
+            existingForDay.forEach((s) =>
+              updateSchedule(s.id, {
+                startTime: '',
+                endTime: '',
+                isAvailable: false,
+              })
+            );
           } else {
+            addSchedule({
+              technicianId: techId,
+              date: dateStr,
+              startTime: '',
+              endTime: '',
+              isAvailable: false,
+            });
+          }
+        } else {
+          if (existingForDay.length === 1) {
+            updateSchedule(existingForDay[0].id, {
+              startTime: shiftCfg.startTime,
+              endTime: shiftCfg.endTime,
+              isAvailable: true,
+            });
+          } else {
+            existingForDay.forEach((s) => deleteSchedule(s.id));
             addSchedule({
               technicianId: techId,
               date: dateStr,
@@ -769,13 +809,23 @@ export default function TechnicianSchedule() {
 
                         {/* 每天排班单元格 */}
                         {weekDays.map((day) => {
-                          const shift = getShiftForCell(tech, day);
-                          const shiftCfg = SHIFT_CONFIG[shift];
-                          const cellAppointments = getAppointmentsForCell(
-                            tech.id,
+                          const cellSchedules = getSchedulesForCell(tech.id, day);
+                          const { shift, override } = resolveCellShift(
+                            cellSchedules,
+                            tech,
                             day
                           );
-                          const cellSchedules = getSchedulesForCell(tech.id, day);
+                          const activeSchedule = cellSchedules.find((s) => s.isAvailable);
+                          const effectiveCfg = SHIFT_CONFIG[shift];
+                          const displayStartTime =
+                            override && activeSchedule
+                              ? activeSchedule.startTime
+                              : effectiveCfg.startTime;
+                          const displayEndTime =
+                            override && activeSchedule
+                              ? activeSchedule.endTime
+                              : effectiveCfg.endTime;
+                          const cellAppointments = getAppointmentsForCell(tech.id, day);
                           const today = isToday(day);
 
                           return (
@@ -789,15 +839,15 @@ export default function TechnicianSchedule() {
                                 openScheduleModal(
                                   tech,
                                   day,
-                                  cellSchedules[0]
+                                  activeSchedule ?? cellSchedules[0]
                                 )
                               }
                             >
                               <div
                                 className={cn(
                                   'rounded-lg border p-2 min-h-[72px] transition-all duration-200',
-                                  shiftCfg.bg,
-                                  shiftCfg.border,
+                                  effectiveCfg.bg,
+                                  effectiveCfg.border,
                                   'group-hover:shadow-md group-hover:scale-[1.02]'
                                 )}
                               >
@@ -806,13 +856,13 @@ export default function TechnicianSchedule() {
                                     <div
                                       className={cn(
                                         'text-xs font-semibold flex items-center gap-1',
-                                        shiftCfg.text
+                                        effectiveCfg.text
                                       )}
                                     >
                                       <span className="inline-flex items-center justify-center w-4 h-4 rounded bg-white/60 text-[10px] font-bold">
-                                        {shiftCfg.short}
+                                        {effectiveCfg.short}
                                       </span>
-                                      {shiftCfg.startTime}-{shiftCfg.endTime}
+                                      {displayStartTime}-{displayEndTime}
                                     </div>
                                     {/* 预约色块 */}
                                     {cellAppointments.length > 0 && (
