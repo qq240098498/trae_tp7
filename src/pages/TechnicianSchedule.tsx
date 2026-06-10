@@ -268,9 +268,9 @@ export default function TechnicianSchedule() {
     technicianIds: [],
     periodStart: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
     periodEnd: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
-    baseSalary: '0',
-    bonus: '0',
-    deductions: '0',
+    baseSalary: '',
+    bonus: '',
+    deductions: '',
   });
   const [generateFormErrors, setGenerateFormErrors] = useState<Partial<Record<keyof GenerateSalaryForm, string>>>({});
 
@@ -283,6 +283,10 @@ export default function TechnicianSchedule() {
 
   const [isSalaryDetailModalOpen, setIsSalaryDetailModalOpen] = useState(false);
   const [viewingSalary, setViewingSalary] = useState<SalaryPayment | null>(null);
+
+  const [isEditSalaryModalOpen, setIsEditSalaryModalOpen] = useState(false);
+  const [editingSalary, setEditingSalary] = useState<SalaryPayment | null>(null);
+  const [editSalaryForm, setEditSalaryForm] = useState({ baseSalary: '', bonus: '', deductions: '', remark: '' });
 
   const [currentWeekStart, setCurrentWeekStart] = useState(() =>
     startOfWeek(new Date(), { weekStartsOn: 1 })
@@ -861,9 +865,9 @@ export default function TechnicianSchedule() {
       technicianIds: technicians.map((t) => t.id),
       periodStart: salaryDateRange.startDate,
       periodEnd: salaryDateRange.endDate,
-      baseSalary: '0',
-      bonus: '0',
-      deductions: '0',
+      baseSalary: '',
+      bonus: '',
+      deductions: '',
     });
     setGenerateFormErrors({});
     setIsGenerateSalaryModalOpen(true);
@@ -963,6 +967,33 @@ export default function TechnicianSchedule() {
     setIsSalaryDetailModalOpen(true);
   };
 
+  const openEditSalaryModal = (payment: SalaryPayment) => {
+    setEditingSalary(payment);
+    setEditSalaryForm({
+      baseSalary: String(payment.baseSalary),
+      bonus: String(payment.bonus),
+      deductions: String(payment.deductions),
+      remark: payment.remark || '',
+    });
+    setIsEditSalaryModalOpen(true);
+  };
+
+  const handleEditSalary = () => {
+    if (!editingSalary) return;
+    const bs = Number(editSalaryForm.baseSalary) || 0;
+    const bn = Number(editSalaryForm.bonus) || 0;
+    const dd = Number(editSalaryForm.deductions) || 0;
+    const netSalary = Math.round((bs + editingSalary.totalCommission + bn - dd) * 100) / 100;
+    updateSalaryPayment(editingSalary.id, {
+      baseSalary: bs,
+      bonus: bn,
+      deductions: dd,
+      netSalary,
+      remark: editSalaryForm.remark || undefined,
+    });
+    setIsEditSalaryModalOpen(false);
+  };
+
   const handleSalaryDateRangePresetChange = (preset: DateRangePreset) => {
     const today = new Date();
     let start: Date;
@@ -1018,8 +1049,10 @@ export default function TechnicianSchedule() {
           <div className="flex items-center gap-2">
             <button
               className={cn(
-                'btn-primary flex items-center gap-2',
-                activeTab === 'salary' && 'btn-outline'
+                'flex items-center gap-2',
+                activeTab === 'salary'
+                  ? 'bg-jade-500 text-white px-6 py-2.5 rounded-lg font-medium transition-all duration-200 hover:bg-jade-600 active:bg-jade-700'
+                  : 'btn-primary'
               )}
               onClick={() =>
                 activeTab === 'salary'
@@ -2098,13 +2131,22 @@ export default function TechnicianSchedule() {
                               查看明细
                             </button>
                             {payment.status === 'pending' && (
-                              <button
-                                className="btn-primary flex items-center gap-1.5 text-sm"
-                                onClick={() => openPaySalaryModal(payment)}
-                              >
-                                <Send size={14} />
-                                发放工资
-                              </button>
+                              <>
+                                <button
+                                  className="btn-ghost flex items-center gap-1.5 text-sm"
+                                  onClick={() => openEditSalaryModal(payment)}
+                                >
+                                  <Edit2 size={14} />
+                                  编辑
+                                </button>
+                                <button
+                                  className="btn-primary flex items-center gap-1.5 text-sm"
+                                  onClick={() => openPaySalaryModal(payment)}
+                                >
+                                  <Send size={14} />
+                                  发放工资
+                                </button>
+                              </>
                             )}
                             {payment.status === 'paid' && payment.paidMethod && (
                               <p className="text-xs text-ink-400">
@@ -3605,6 +3647,138 @@ export default function TechnicianSchedule() {
                   onClick={() => setIsSalaryDetailModalOpen(false)}
                 >
                   关闭
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* 编辑工资单 Modal */}
+      {isEditSalaryModalOpen && editingSalary && (() => {
+        const tech = technicians.find((t) => t.id === editingSalary.technicianId);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-ink-900/50 backdrop-blur-sm animate-fade-in"
+              onClick={() => setIsEditSalaryModalOpen(false)}
+            />
+            <div className="relative bg-white rounded-2xl shadow-modal w-full max-w-md overflow-hidden animate-fade-up">
+              <div className="flex items-center justify-between px-6 py-5 border-b border-cream-200">
+                <div>
+                  <h2 className="text-xl font-bold text-ink-500">编辑工资单</h2>
+                  <p className="text-sm text-ink-300 mt-0.5">
+                    {tech?.name} · {editingSalary.periodStart} ~ {editingSalary.periodEnd}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setIsEditSalaryModalOpen(false)}
+                  className="p-2 rounded-lg text-ink-300 hover:text-ink-500 hover:bg-cream-100 transition-all"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="px-6 py-5 space-y-5">
+                <div className="bg-rose-50 rounded-xl p-3 border border-rose-100">
+                  <p className="text-xs text-rose-600 mb-1">提成工资（自动计算，不可修改）</p>
+                  <p className="text-xl font-bold text-rose-700">
+                    ¥{editingSalary.totalCommission.toLocaleString()}
+                    <span className="text-xs font-normal text-rose-500 ml-2">
+                      {editingSalary.totalServiceCount}次服务
+                    </span>
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-ink-500 mb-1.5">
+                      基本工资(¥)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editSalaryForm.baseSalary}
+                      onChange={(e) =>
+                        setEditSalaryForm((f) => ({ ...f, baseSalary: e.target.value }))
+                      }
+                      placeholder="0"
+                      className="input-field"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-ink-500 mb-1.5">
+                      奖金(¥)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editSalaryForm.bonus}
+                      onChange={(e) =>
+                        setEditSalaryForm((f) => ({ ...f, bonus: e.target.value }))
+                      }
+                      placeholder="0"
+                      className="input-field"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-ink-500 mb-1.5">
+                      扣款(¥)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editSalaryForm.deductions}
+                      onChange={(e) =>
+                        setEditSalaryForm((f) => ({ ...f, deductions: e.target.value }))
+                      }
+                      placeholder="0"
+                      className="input-field"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-ink-500 mb-1.5">
+                    备注
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={editSalaryForm.remark}
+                    onChange={(e) =>
+                      setEditSalaryForm((f) => ({ ...f, remark: e.target.value }))
+                    }
+                    placeholder="备注信息（可选）"
+                    className="input-field resize-none"
+                  />
+                </div>
+
+                <div className="bg-gradient-to-br from-gold-50 to-sandalwood-50 rounded-xl p-3 border border-gold-100">
+                  <p className="text-xs text-gold-600 mb-1">修改后实发工资</p>
+                  <p className="text-2xl font-bold text-gold-700">
+                    ¥{(
+                      (Number(editSalaryForm.baseSalary) || 0) +
+                      editingSalary.totalCommission +
+                      (Number(editSalaryForm.bonus) || 0) -
+                      (Number(editSalaryForm.deductions) || 0)
+                    ).toLocaleString()}
+                  </p>
+                  <p className="text-xs text-ink-400 mt-1">
+                    = 基本¥{Number(editSalaryForm.baseSalary) || 0} + 提成¥{editingSalary.totalCommission} + 奖金¥{Number(editSalaryForm.bonus) || 0} - 扣款¥{Number(editSalaryForm.deductions) || 0}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-cream-200 bg-cream-50">
+                <button
+                  className="btn-ghost"
+                  onClick={() => setIsEditSalaryModalOpen(false)}
+                >
+                  取消
+                </button>
+                <button className="btn-primary" onClick={handleEditSalary}>
+                  保存修改
                 </button>
               </div>
             </div>
